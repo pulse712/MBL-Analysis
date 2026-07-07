@@ -457,9 +457,17 @@ def get_team_state(enriched, team, report_date):
         return None
 
     last = tdf.iloc[-1]
+    # Compute current streak after last game
+    sb = last['streak_before']
+    res = last['result']
+    if res == 'W':
+        cur_streak = sb + 1 if sb >= 0 else 1
+    else:
+        cur_streak = sb - 1 if sb <= 0 else -1
+
     return {
         'team':               team,
-        'streak_before':      last['streak_before'] + (1 if last['result']=='W' else -1),
+        'streak_before':      cur_streak,
         'streak_before_prev': last['streak_before'],
         'prev_result':        last['result'],
         'prev_opponent':      last['opponent'],
@@ -1075,8 +1083,9 @@ if __name__ == '__main__':
         tdf = enriched[(enriched['team']==team) & (enriched['date'].dt.date < REPORT_DATE)]
         if not tdf.empty:
             last = tdf.iloc[-1]
-            streak_after = last['streak_before'] + (1 if last['result']=='W' else -1)
-            opp_streaks[team] = streak_after
+            sb = last['streak_before']
+            res = last['result']
+            opp_streaks[team] = (sb+1 if sb>=0 else 1) if res=='W' else (sb-1 if sb<=0 else -1)
             # Road win%
             road = tdf[tdf['home_away']=='away']
             if not road.empty:
