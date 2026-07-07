@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+env/
+
+# Lock files
+.~lock.*
+
+# Generated daily reports (not needed in repo)
+MLB_Daily_Report_*.xlsx
+
+# Analysis output (too large for GitHub)
+MLB_Scenario_Analysis.xlsx
+mlb_analysis.py
+
+# Temp odds input
+daily_odds_input.xlsx
