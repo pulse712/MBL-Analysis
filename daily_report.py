@@ -637,7 +637,7 @@ def s10(r, opp_streaks):
     cl = r['line']
     if cl is None or not is_home(r) or r['streak_before'] >= 0: return False
     os = opp_streaks.get(r['opponent'])
-    return os is not None and -3 <= os <= -1 and cl >= -150
+    return os is not None and -3 <= os <= -1 and cl <= -150
 
 def s11(r, opp_streaks):
     if not is_home(r) or r['streak_before'] > -4: return False
@@ -709,7 +709,7 @@ def s26(r):
 def s27(r):
     cl = r['line']
     return (cl is not None and is_home(r) and last_game_series(r)
-            and div_match(r['team'], r['opponent']) and cl >= -180)
+            and div_match(r['team'], r['opponent']) and cl <= -180)
 
 def s28(r):
     cl = r['line']
