@@ -1412,6 +1412,130 @@ def build_report(games, triggers, report_date, odds):
     ws_track.freeze_panes(3, 0)
     ws_track.autofilter(2, 0, track_row, 8)
 
+    # ── SCENARIO PERFORMANCE TAB ──────────────────────────────────
+    # Lists all 36 scenarios with cumulative W/L/P/L fed from Results Tracker
+    ws_perf = wb.add_worksheet('📋 Scenario Performance')
+    ws_perf.set_tab_color('#1F3864')
+    ws_perf.set_column(0, 0, 6)    # Scenario #
+    ws_perf.set_column(1, 1, 40)   # Scenario Name
+    ws_perf.set_column(2, 2, 14)   # Classification
+    ws_perf.set_column(3, 3, 8)    # W
+    ws_perf.set_column(4, 4, 8)    # L
+    ws_perf.set_column(5, 5, 10)   # Total
+    ws_perf.set_column(6, 6, 10)   # Win%
+    ws_perf.set_column(7, 7, 14)   # Net P/L
+
+    f_perf_banner = wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri',
+                                    'font_color':'white','bg_color':'#1F3864',
+                                    'align':'center','valign':'vcenter'})
+    f_perf_sub    = wb.add_format({'font_size':10,'font_name':'Calibri','italic':True,
+                                    'font_color':'#D0E4F5','bg_color':'#1F3864',
+                                    'align':'center','valign':'vcenter'})
+    f_perf_hdr    = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri',
+                                    'font_color':'white','bg_color':'#2E5F8A',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_sid    = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri',
+                                    'font_color':'#1F3864','bg_color':'#EDF3FB',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_name   = wb.add_format({'font_size':10,'font_name':'Calibri',
+                                    'font_color':'#1F3864','bg_color':'#EDF3FB',
+                                    'align':'left','valign':'vcenter','border':1,'indent':1})
+    f_perf_bet    = wb.add_format({'font_size':9,'font_name':'Calibri','bold':True,
+                                    'font_color':'#375623','bg_color':'#E2EFDA',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_fade   = wb.add_format({'font_size':9,'font_name':'Calibri','bold':True,
+                                    'font_color':'#C00000','bg_color':'#FFE7E7',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_inc    = wb.add_format({'font_size':9,'font_name':'Calibri','bold':True,
+                                    'font_color':'#7D5A00','bg_color':'#FFF3CC',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_num    = wb.add_format({'font_size':10,'font_name':'Calibri',
+                                    'bg_color':'#EDF3FB','align':'center',
+                                    'valign':'vcenter','border':1})
+    f_perf_pct    = wb.add_format({'font_size':10,'font_name':'Calibri','num_format':'0.000',
+                                    'bg_color':'#EDF3FB','align':'center',
+                                    'valign':'vcenter','border':1})
+    f_perf_money  = wb.add_format({'font_size':10,'font_name':'Calibri',
+                                    'num_format':'$#,##0.00','bg_color':'#EDF3FB',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_zero   = wb.add_format({'font_size':10,'font_name':'Calibri','italic':True,
+                                    'font_color':'#AAAAAA','bg_color':'#EDF3FB',
+                                    'align':'center','valign':'vcenter','border':1})
+    f_perf_total  = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri',
+                                    'font_color':'white','bg_color':'#1F3864',
+                                    'align':'center','valign':'vcenter','border':1})
+
+    # Banner
+    ws_perf.set_row(0, 28); ws_perf.set_row(1, 16)
+    ws_perf.merge_range(0, 0, 0, 7, '📋  SCENARIO PERFORMANCE TRACKER  —  Season Cumulative', f_perf_banner)
+    ws_perf.merge_range(1, 0, 1, 7,
+        'Updates automatically as you enter results in the Results Tracker tab.', f_perf_sub)
+
+    # Column headers
+    ws_perf.set_row(2, 20)
+    for ci, h in enumerate(['#', 'Scenario Name', 'Classification', 'W', 'L', 'Total', 'Win%', 'Net P/L']):
+        ws_perf.write(2, ci, h, f_perf_hdr)
+    ws_perf.freeze_panes(3, 0)
+
+    # The Results Tracker sheet name for COUNTIFS/SUMIF formulas
+    # Results Tracker col F = Scenario (e.g. "#01 BLOWOUT #1 - MJ")
+    # Results Tracker col H = Result (W or L)
+    # Results Tracker col I = Net P/L
+    tracker_sheet = "'📈 Results Tracker'"
+    # Data starts at row 4 in tracker (row index 3), no fixed end — use large range
+    tracker_range_end = max(track_row + 500, 1000)  # generous buffer for future entries
+    scen_col   = f'{tracker_sheet}!F$4:F${tracker_range_end}'   # Scenario column
+    result_col = f'{tracker_sheet}!H$4:H${tracker_range_end}'   # Result column
+    pl_col     = f'{tracker_sheet}!I$4:I${tracker_range_end}'   # Net P/L column
+
+    perf_row = 3
+    for sid, sname, verdict, _ in SCENARIO_DEFS:
+        # Scenario identifier as it appears in the tracker (e.g. "#01 BLOWOUT #1 - MJ")
+        scen_id_str = f'#{sid} {sname}'
+
+        # Classification format
+        if verdict == 'CLEAR BET':   vfmt = f_perf_bet;  vlabel = 'CLEAR BET'
+        elif verdict == 'CLEAR FADE': vfmt = f_perf_fade; vlabel = 'CLEAR FADE'
+        else:                         vfmt = f_perf_inc;  vlabel = 'INCONSISTENT'
+
+        # Excel row for this perf row (1-indexed)
+        er = perf_row + 1
+
+        ws_perf.write(perf_row, 0, sid,     f_perf_sid)
+        ws_perf.write(perf_row, 1, sname,   f_perf_name)
+        ws_perf.write(perf_row, 2, vlabel,  vfmt)
+
+        # W = COUNTIFS(scen_col, scen_id_str, result_col, "W")
+        ws_perf.write_formula(perf_row, 3,
+            f'=COUNTIFS({scen_col},"{scen_id_str}",{result_col},"W")', f_perf_num)
+        # L
+        ws_perf.write_formula(perf_row, 4,
+            f'=COUNTIFS({scen_col},"{scen_id_str}",{result_col},"L")', f_perf_num)
+        # Total
+        ws_perf.write_formula(perf_row, 5,
+            f'=D{er}+E{er}', f_perf_num)
+        # Win%
+        ws_perf.write_formula(perf_row, 6,
+            f'=IF(F{er}>0,D{er}/F{er},"")', f_perf_pct)
+        # Net P/L = SUMIFS(pl_col, scen_col, scen_id_str, result_col, "<>")
+        ws_perf.write_formula(perf_row, 7,
+            f'=SUMPRODUCT(({scen_col}="{scen_id_str}")*ISNUMBER(MATCH({result_col},{{"W","L"}},0))*({pl_col}))',
+            f_perf_money)
+
+        perf_row += 1
+
+    # Totals row
+    ws_perf.set_row(perf_row, 20)
+    ws_perf.write(perf_row, 0, '',        f_perf_total)
+    ws_perf.write(perf_row, 1, 'SEASON TOTALS', f_perf_total)
+    ws_perf.write(perf_row, 2, '',        f_perf_total)
+    ws_perf.write_formula(perf_row, 3, f'=SUM(D4:D{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 4, f'=SUM(E4:E{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 5, f'=SUM(F4:F{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 6,
+        f'=IF(F{perf_row+1}>0,D{perf_row+1}/F{perf_row+1},"")', f_perf_total)
+    ws_perf.write_formula(perf_row, 7, f'=SUM(H4:H{perf_row})', f_perf_total)
+
     wb.close()
     print(f'\n✓ Report saved: {fname}')
     print(f'  Clear Bet games: {n_bet} ({n_bet_t} triggers)')

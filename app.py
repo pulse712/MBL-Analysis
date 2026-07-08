@@ -160,6 +160,51 @@ def build_report_bytes(games, triggers, report_date, odds):
         w4.write_formula(tr,8,f'=SUMIF(H4:H{tr},"W",I4:I{tr})+SUMIF(H4:H{tr},"L",I4:I{tr})',ftt)
     w4.freeze_panes(3,0); w4.autofilter(2,0,tr,8)
 
+    # Scenario Performance tab
+    w5=wb.add_worksheet('Scenario Performance'); w5.set_tab_color('#1F3864')
+    w5.set_column(0,0,6); w5.set_column(1,1,40); w5.set_column(2,2,14)
+    w5.set_column(3,3,8); w5.set_column(4,4,8); w5.set_column(5,5,10)
+    w5.set_column(6,6,10); w5.set_column(7,7,14)
+    fpb=wb.add_format({"bold":True,"font_size":14,"font_name":"Calibri","font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter"})
+    fps=wb.add_format({"font_size":10,"font_name":"Calibri","italic":True,"font_color":"#D0E4F5","bg_color":"#1F3864","align":"center","valign":"vcenter"})
+    fph=wb.add_format({"bold":True,"font_size":10,"font_name":"Calibri","font_color":"white","bg_color":"#2E5F8A","align":"center","valign":"vcenter","border":1})
+    fps2=wb.add_format({"bold":True,"font_size":10,"font_name":"Calibri","font_color":"#1F3864","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1})
+    fpn=wb.add_format({"font_size":10,"font_name":"Calibri","font_color":"#1F3864","bg_color":"#EDF3FB","align":"left","valign":"vcenter","border":1,"indent":1})
+    fpbet=wb.add_format({"font_size":9,"bold":True,"font_color":"#375623","bg_color":"#E2EFDA","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fpfade=wb.add_format({"font_size":9,"bold":True,"font_color":"#C00000","bg_color":"#FFE7E7","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fpinc=wb.add_format({"font_size":9,"bold":True,"font_color":"#7D5A00","bg_color":"#FFF3CC","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fpnum=wb.add_format({"font_size":10,"bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fppct=wb.add_format({"font_size":10,"num_format":"0.000","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fpmny=wb.add_format({"font_size":10,"num_format":"0,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fptot=wb.add_format({"bold":True,"font_size":10,"font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    w5.set_row(0,28); w5.set_row(1,16)
+    w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
+    w5.merge_range(1,0,1,7,"Updates automatically as you enter results in the Results Tracker tab.",fps)
+    w5.set_row(2,20)
+    for ci,h in enumerate(["#","Scenario Name","Classification","W","L","Total","Win%","Net P/L"]):
+        w5.write(2,ci,h,fph)
+    w5.freeze_panes(3,0)
+    tsheet="'Results Tracker'"; tend=max(tr+500,1000)
+    pr=3
+    from daily_report import SCENARIO_DEFS
+    for sid,sname,verdict,_ in SCENARIO_DEFS:
+        sid_str=f"#{sid} {sname}"
+        vfmt=fpbet if verdict=="CLEAR BET" else (fpfade if verdict=="CLEAR FADE" else fpinc)
+        vlabel="CLEAR BET" if verdict=="CLEAR BET" else ("CLEAR FADE" if verdict=="CLEAR FADE" else "INCONSISTENT")
+        er=pr+1
+        w5.write(pr,0,sid,fps2); w5.write(pr,1,sname,fpn); w5.write(pr,2,vlabel,vfmt)
+        w5.write_formula(pr,3,'=COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"W")',fpnum)
+        w5.write_formula(pr,4,'=COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"L")',fpnum)
+        w5.write_formula(pr,5,f'=D{er}+E{er}',fpnum)
+        w5.write_formula(pr,6,f'=IF(F{er}>0,D{er}/F{er},"")',fppct)
+        w5.write_formula(pr,7,'=SUMPRODUCT(('+sc+'="'+sid_str+'")*ISNUMBER(MATCH('+rc+',{"W","L"},0))*('+pc+'))',fpmny)
+        pr+=1
+    w5.set_row(pr,20)
+    for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "SEASON TOTALS",fptot)
+    w5.write_formula(pr,3,f"=SUM(D4:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E4:E{pr})",fptot)
+    w5.write_formula(pr,5,f"=SUM(F4:F{pr})",fptot)
+    w5.write_formula(pr,7,f"=SUM(H4:H{pr})",fptot)
+
     wb.close(); output.seek(0)
     return output.getvalue(), n0+n1+n2, n1, n2
 
