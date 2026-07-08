@@ -1094,17 +1094,91 @@ def build_report(games, triggers, report_date, odds):
                                    'align':'center','valign':'vcenter'})
 
     # ── COLUMN LAYOUT ─────────────────────────────────────────────
-    # Col 0: #  (game number)        width 5
-    # Col 1: H/A badge               width 8
-    # Col 2: Team                     width 26
-    # Col 3: Odds                     width 10
-    # Col 4: Play                     width 22
-    # Col 5: Scenario(s)              width 48
-    NCOLS = 6
-    COL_WIDTHS = [5, 8, 26, 10, 22, 48]
-    COL_HEADERS = ['#', 'H/A', 'Team', 'Odds', 'Play', 'Scenario(s)']
+    # New column layout: GAME | H/A | Team | Odds | Play / Scenario (combined)
+    NCOLS = 5
+    COL_WIDTHS = [32, 8, 26, 10, 50]
+    COL_HEADERS = ['GAME', 'H/A', 'Team', 'Odds', 'Play  /  Scenario']
+
+    # Heavy bottom border formats for home rows (separates games visually)
+    f_home_lbl_hb = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':'#333333','bg_color':HOME_BG,'align':'left','valign':'vcenter','left':2,'left_color':STEEL,'top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'right':1,'right_color':'#B8C9DC','indent':1})
+    f_home_c_hb   = wb.add_format({'font_size':10,'font_name':'Calibri','bg_color':HOME_BG,'align':'center','valign':'vcenter','top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#B8C9DC','right':1,'right_color':'#B8C9DC'})
+    f_fade_h_hb   = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':FADE_RED,'bg_color':FADE_BG,'align':'center','valign':'vcenter','top':1,'top_color':'#E8AAAA','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#E8AAAA','right':1,'right_color':'#E8AAAA'})
+    f_bet_a       = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#A8D08D'})
+    f_bet_h_hb    = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'align':'center','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#A8D08D'})
+    f_watch_h_hb  = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':WATCH_AMB,'bg_color':WATCH_BG,'align':'center','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#D4B800'})
+    f_no_play_h_hb= wb.add_format({'italic':True,'font_size':9,'font_name':'Calibri','font_color':GRAY_TEXT,'bg_color':HOME_BG,'align':'center','valign':'vcenter','top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#B8C9DC','right':1,'right_color':'#B8C9DC'})
+    f_scen_h_hb   = wb.add_format({'font_size':9,'font_name':'Calibri','italic':True,'font_color':'#555555','bg_color':HOME_BG,'align':'left','valign':'vcenter','text_wrap':True,'indent':1,'top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#B8C9DC','right':1,'right_color':'#B8C9DC'})
+    f_game_cell   = wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':NAVY,'bg_color':AWAY_BG,'align':'left','valign':'vcenter','border':1,'border_color':'#B8C9DC','indent':1})
+    f_game_cell_h = wb.add_format({'font_size':9,'font_name':'Calibri','font_color':GRAY_TEXT,'bg_color':HOME_BG,'align':'left','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#B8C9DC'})
+
+    def get_play_fmt_away(triggers):
+        if not triggers: return f_no_play
+        v = triggers[0]['verdict']
+        if v=='CLEAR FADE': return f_fade_away
+        if v=='CLEAR BET':  return f_bet_a
+        return f_watch
+
+    def get_play_fmt_home(triggers):
+        if not triggers: return f_no_play_h_hb
+        v = triggers[0]['verdict']
+        if v=='CLEAR FADE': return f_fade_h_hb
+        if v=='CLEAR BET':  return f_bet_h_hb
+        return f_watch_h_hb
 
     def write_tab(ws, tab_label, verdict_filter, tab_color):
+        ws.set_tab_color(tab_color)
+        for ci, w in enumerate(COL_WIDTHS):
+            ws.set_column(ci, ci, w)
+
+        ws.set_row(0, 30); ws.set_row(1, 18)
+        ws.merge_range(0,0,0,NCOLS-1, f'⚾  MLB DAILY BETTING REPORT  —  {tab_label}', f_banner)
+        ws.merge_range(1,0,1,NCOLS-1,
+            f'{report_date.strftime("%A, %B %d, %Y")}  |  Generated {datetime.now().strftime("%I:%M %p")}',
+            f_subtitle)
+        ws.set_row(2, 20)
+        for ci, h in enumerate(COL_HEADERS):
+            ws.write(2, ci, h, f_col_hdr)
+        ws.freeze_panes(3, 0)
+
+        row = 3; games_written = 0
+
+        for g in games:
+            away, home = g['away_team'], g['home_team']
+            away_tc, home_tc = title_case(away), title_case(home)
+            matchup = f'{away_tc}  @  {home_tc}'
+
+            at = [t for t in triggers if t['team']==away and t['opponent']==home and t['verdict']==verdict_filter]
+            ht = [t for t in triggers if t['team']==home and t['opponent']==away and t['verdict']==verdict_filter]
+            if not at and not ht: continue
+            games_written += 1
+
+            # Away row
+            ws.set_row(row, 20)
+            a_play = (at[0]['play'] + '  |  ' + '  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in at)) if at else ''
+            ws.write(row, 0, matchup,             f_game_cell)
+            ws.write(row, 1, 'AWAY',              f_away_cell)
+            ws.write(row, 2, away_tc,             f_away_label)
+            ws.write(row, 3, fmt_line(odds.get(away)), f_away_cell)
+            ws.write(row, 4, a_play,              get_play_fmt_away(at))
+            row += 1
+
+            # Home row — heavy bottom border separates games
+            ws.set_row(row, 20)
+            h_play = (ht[0]['play'] + '  |  ' + '  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in ht)) if ht else ''
+            ws.write(row, 0, '',                  f_game_cell_h)
+            ws.write(row, 1, 'HOME',              f_home_c_hb)
+            ws.write(row, 2, home_tc,             f_home_lbl_hb)
+            ws.write(row, 3, fmt_line(odds.get(home)), f_home_c_hb)
+            ws.write(row, 4, h_play,              get_play_fmt_home(ht))
+            row += 1
+
+        if games_written == 0:
+            ws.set_row(row, 30)
+            ws.merge_range(row,0,row,NCOLS-1,
+                f'No {verdict_filter.title()} scenarios triggered today.', f_no_games)
+        return games_written
+
+    # ── WRITE TABS ────────────────────────────────────────────────
         ws.set_tab_color(tab_color)
         for ci, w in enumerate(COL_WIDTHS):
             ws.set_column(ci, ci, w)
@@ -1183,8 +1257,11 @@ def build_report(games, triggers, report_date, odds):
         return games_written
 
     # ── WRITE TABS ────────────────────────────────────────────────
+    ws_bet  = wb.add_worksheet('🟢 Clear Bet')
+    n_bet   = write_tab(ws_bet,  'CLEAR BET',    'CLEAR BET',    '#00B050')
+
     ws_fade = wb.add_worksheet('🔴 Clear Fade')
-    n_fade  = write_tab(ws_fade, 'CLEAR FADE', 'CLEAR FADE', '#FF0000')
+    n_fade  = write_tab(ws_fade, 'CLEAR FADE',   'CLEAR FADE',   '#FF0000')
 
     ws_inc  = wb.add_worksheet('🟡 Inconsistent')
     n_inc   = write_tab(ws_inc,  'INCONSISTENT', 'INCONSISTENT', '#FFD700')
@@ -1204,54 +1281,140 @@ def build_report(games, triggers, report_date, odds):
         f'{report_date.strftime("%A, %B %d, %Y")}  |  Generated {datetime.now().strftime("%I:%M %p")}',
         f_subtitle)
 
+    n_bet_t  = sum(1 for t in triggers if t['verdict']=='CLEAR BET')
     n_fade_t = sum(1 for t in triggers if t['verdict']=='CLEAR FADE')
     n_inc_t  = sum(1 for t in triggers if t['verdict']=='INCONSISTENT')
 
-    ws_sum.set_row(3, 28)
-    ws_sum.set_row(4, 28)
-    ws_sum.set_row(5, 28)
+    # Add green formats for Clear Bet
+    f_sum_bet_l = wb.add_format({'bold':True,'font_size':11,'font_name':'Calibri',
+                                  'font_color':GREEN_FG,'bg_color':GREEN_BG,
+                                  'border':1,'border_color':'#A8D08D',
+                                  'align':'left','valign':'vcenter','indent':1})
+    f_sum_bet_v = wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri',
+                                  'font_color':GREEN_FG,'bg_color':GREEN_BG,
+                                  'border':1,'border_color':'#A8D08D',
+                                  'align':'center','valign':'vcenter'})
 
-    ws_sum.write(3, 0, 'Total Games Today',     f_sum_label)
-    ws_sum.write(3, 1, len(games),              f_sum_val)
-    ws_sum.write(3, 2, 'Games With Triggers',   f_sum_label)
-    ws_sum.write(3, 3, n_fade + n_inc,          f_sum_val)
+    ws_sum.set_row(3, 28); ws_sum.set_row(4, 28); ws_sum.set_row(5, 28)
+    ws_sum.write(3, 0, 'Total Games Today',       f_sum_label)
+    ws_sum.write(3, 1, len(games),                f_sum_val)
+    ws_sum.write(3, 2, 'Games With Triggers',     f_sum_label)
+    ws_sum.write(3, 3, n_bet + n_fade + n_inc,    f_sum_val)
+    ws_sum.write(4, 0, '🟢  Clear Bet Triggers',  f_sum_bet_l)
+    ws_sum.write(4, 1, n_bet_t,                   f_sum_bet_v)
+    ws_sum.write(4, 2, '🔴  Clear Fade Triggers', f_sum_fade_l)
+    ws_sum.write(4, 3, n_fade_t,                  f_sum_fade_v)
+    ws_sum.write(5, 0, '🟡  Inconsistent Triggers',f_sum_watch_l)
+    ws_sum.write(5, 1, n_inc_t,                   f_sum_watch_v)
 
-    ws_sum.write(4, 0, '🔴  Clear Fade Triggers',  f_sum_fade_l)
-    ws_sum.write(4, 1, n_fade_t,                   f_sum_fade_v)
-    ws_sum.write(4, 2, '🟡  Inconsistent Triggers', f_sum_watch_l)
-    ws_sum.write(4, 3, n_inc_t,                    f_sum_watch_v)
-
-    # Top plays section
     ws_sum.set_row(7, 20)
     ws_sum.merge_range(6, 0, 6, 3, 'TOP PLAYS TODAY', f_col_hdr)
-    ws_sum.write(7, 0, 'Team',       f_col_hdr)
-    ws_sum.write(7, 1, 'Odds',       f_col_hdr)
-    ws_sum.write(7, 2, 'Play',       f_col_hdr)
-    ws_sum.write(7, 3, 'Scenario',   f_col_hdr)
+    ws_sum.write(7, 0, 'Team', f_col_hdr)
+    ws_sum.write(7, 1, 'Odds', f_col_hdr)
+    ws_sum.write(7, 2, 'Play', f_col_hdr)
+    ws_sum.write(7, 3, 'Scenario', f_col_hdr)
 
     sum_row = 8
+    for t in [x for x in triggers if x['verdict']=='CLEAR BET']:
+        ws_sum.write(sum_row, 0, title_case(t['team']), f_sum_bet_l)
+        ws_sum.write(sum_row, 1, fmt_line(t['line']),   f_sum_bet_v)
+        ws_sum.write(sum_row, 2, t['play'],             f_sum_bet_l)
+        ws_sum.write(sum_row, 3, f"#{t['scenario_id']} {t['scenario']}", f_sum_bet_l)
+        sum_row += 1
     for t in [x for x in triggers if x['verdict']=='CLEAR FADE']:
-        pf = f_sum_fade_l
-        ws_sum.write(sum_row, 0, title_case(t['team']),     pf)
-        ws_sum.write(sum_row, 1, fmt_line(t['line']),       f_sum_fade_v)
-        ws_sum.write(sum_row, 2, t['play'],                 f_sum_fade_l)
-        ws_sum.write(sum_row, 3, f"#{t['scenario_id']} {t['scenario']}", pf)
+        ws_sum.write(sum_row, 0, title_case(t['team']), f_sum_fade_l)
+        ws_sum.write(sum_row, 1, fmt_line(t['line']),   f_sum_fade_v)
+        ws_sum.write(sum_row, 2, t['play'],             f_sum_fade_l)
+        ws_sum.write(sum_row, 3, f"#{t['scenario_id']} {t['scenario']}", f_sum_fade_l)
         sum_row += 1
     for t in [x for x in triggers if x['verdict']=='INCONSISTENT']:
-        pf = f_sum_watch_l
-        ws_sum.write(sum_row, 0, title_case(t['team']),     pf)
-        ws_sum.write(sum_row, 1, fmt_line(t['line']),       f_sum_watch_v)
-        ws_sum.write(sum_row, 2, t['play'],                 f_sum_watch_l)
-        ws_sum.write(sum_row, 3, f"#{t['scenario_id']} {t['scenario']}", pf)
+        ws_sum.write(sum_row, 0, title_case(t['team']), f_sum_watch_l)
+        ws_sum.write(sum_row, 1, fmt_line(t['line']),   f_sum_watch_v)
+        ws_sum.write(sum_row, 2, t['play'],             f_sum_watch_l)
+        ws_sum.write(sum_row, 3, f"#{t['scenario_id']} {t['scenario']}", f_sum_watch_l)
         sum_row += 1
 
     if sum_row == 8:
         ws_sum.merge_range(8, 0, 8, 3, 'No scenarios triggered today.', f_no_games)
-
     ws_sum.freeze_panes(8, 0)
+
+    # ── RESULTS TRACKER TAB ───────────────────────────────────────
+    # Client enters W/L results here; tab auto-tallies by scenario
+    ws_track = wb.add_worksheet('📈 Results Tracker')
+    ws_track.set_tab_color('#375623')
+    ws_track.set_column(0, 0, 12)   # Date
+    ws_track.set_column(1, 1, 26)   # Team
+    ws_track.set_column(2, 2, 10)   # H/A
+    ws_track.set_column(3, 3, 10)   # Odds
+    ws_track.set_column(4, 4, 14)   # Play
+    ws_track.set_column(5, 5, 40)   # Scenario
+    ws_track.set_column(6, 6, 12)   # Classification
+    ws_track.set_column(7, 7, 12)   # Result (W/L — client fills)
+    ws_track.set_column(8, 8, 14)   # Net P/L (auto)
+
+    f_track_hdr = wb.add_format({'bold':True,'font_color':'white','bg_color':'#375623',
+                                   'align':'center','valign':'vcenter','border':1,'font_name':'Calibri'})
+    f_track_note= wb.add_format({'italic':True,'font_color':GRAY_TEXT,'font_size':9,
+                                   'align':'center','valign':'vcenter','border':1})
+    f_track_cell= wb.add_format({'align':'center','valign':'vcenter','border':1,
+                                   'border_color':'#C6EFCE','font_name':'Calibri'})
+    f_track_left= wb.add_format({'align':'left','valign':'vcenter','border':1,
+                                   'border_color':'#C6EFCE','font_name':'Calibri','indent':1})
+    f_input_cell= wb.add_format({'bold':True,'align':'center','valign':'vcenter',
+                                   'border':2,'border_color':'#375623',
+                                   'bg_color':'#EAF4E8','font_name':'Calibri'})
+
+    ws_track.set_row(0, 30); ws_track.set_row(1, 18)
+    ws_track.merge_range(0, 0, 0, 8, '📈  RESULTS TRACKER  —  Enter W or L after each game', f_banner)
+    ws_track.merge_range(1, 0, 1, 8,
+        'Enter W or L in the Result column. Net P/L calculates automatically.',
+        f_subtitle)
+
+    track_headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result\n(W or L)', 'Net P/L\n($100 flat)']
+    ws_track.set_row(2, 30)
+    for ci, h in enumerate(track_headers):
+        ws_track.write(2, ci, h, f_track_hdr)
+
+    track_row = 3
+    for t in triggers:
+        line = t['line']
+        # Net P/L formula: =IF(H4="W", IF(D4>0, D4, 100/ABS(D4)*100), IF(H4="L", -100, ""))
+        # Row is 1-indexed in Excel formulas
+        excel_row = track_row + 1  # Excel rows are 1-indexed
+        ws_track.write(track_row, 0, report_date.strftime('%Y-%m-%d'), f_track_cell)
+        ws_track.write(track_row, 1, title_case(t['team']),             f_track_left)
+        ws_track.write(track_row, 2, t['home_away'].upper(),            f_track_cell)
+        ws_track.write(track_row, 3, fmt_line(line),                    f_track_cell)
+        ws_track.write(track_row, 4, t['play'],                         f_track_left)
+        ws_track.write(track_row, 5, f"#{t['scenario_id']} {t['scenario']}", f_track_left)
+        ws_track.write(track_row, 6, t['verdict'],                      f_track_cell)
+        ws_track.write(track_row, 7, '',                                f_input_cell)  # client fills
+        # Net P/L formula
+        if line is not None and isinstance(line, int):
+            if line > 0:
+                payout_formula = f'=IF(H{excel_row}="W",{line},IF(H{excel_row}="L",-100,""))'
+            else:
+                payout_formula = f'=IF(H{excel_row}="W",ROUND(100/ABS({line})*100,2),IF(H{excel_row}="L",-100,""))'
+            ws_track.write_formula(track_row, 8, payout_formula, f_track_cell)
+        else:
+            ws_track.write(track_row, 8, '', f_track_cell)
+        track_row += 1
+
+    # Totals row
+    if track_row > 3:
+        f_total = wb.add_format({'bold':True,'bg_color':'#375623','font_color':'white',
+                                   'align':'center','border':1,'font_name':'Calibri'})
+        ws_track.merge_range(track_row, 0, track_row, 7, 'TOTAL NET P/L', f_total)
+        ws_track.write_formula(track_row, 8,
+            f'=SUMIF(H4:H{track_row},"W",I4:I{track_row})+SUMIF(H4:H{track_row},"L",I4:I{track_row})',
+            f_total)
+
+    ws_track.freeze_panes(3, 0)
+    ws_track.autofilter(2, 0, track_row, 8)
 
     wb.close()
     print(f'\n✓ Report saved: {fname}')
+    print(f'  Clear Bet games: {n_bet} ({n_bet_t} triggers)')
     print(f'  Clear Fade games: {n_fade} ({n_fade_t} triggers)')
     print(f'  Inconsistent games: {n_inc} ({n_inc_t} triggers)')
     return fname
