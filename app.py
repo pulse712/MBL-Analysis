@@ -175,7 +175,7 @@ def build_report_bytes(games, triggers, report_date, odds):
     fpinc=wb.add_format({"font_size":9,"bold":True,"font_color":"#7D5A00","bg_color":"#FFF3CC","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fpnum=wb.add_format({"font_size":10,"bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fppct=wb.add_format({"font_size":10,"num_format":"0.000","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpmny=wb.add_format({"font_size":10,"num_format":"0,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fpmny=wb.add_format({"font_size":10,"num_format":"$#,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fptot=wb.add_format({"bold":True,"font_size":10,"font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     w5.set_row(0,28); w5.set_row(1,16)
     w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
@@ -185,6 +185,9 @@ def build_report_bytes(games, triggers, report_date, odds):
         w5.write(2,ci,h,fph)
     w5.freeze_panes(3,0)
     tsheet="'Results Tracker'"; tend=max(tr+500,1000)
+    sc=tsheet+'!F$4:F$'+str(tend)
+    rc=tsheet+'!H$4:H$'+str(tend)
+    pc=tsheet+'!I$4:I$'+str(tend)
     pr=3
     from daily_report import SCENARIO_DEFS
     for sid,sname,verdict,_ in SCENARIO_DEFS:
