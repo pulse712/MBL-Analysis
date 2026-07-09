@@ -18,3 +18,13 @@ mlb_analysis.py
 
 # Temp odds input
 daily_odds_input.xlsx
+
+# Master Results (user-generated data, should not be in repo)
+Master_Results.xlsx
+
+# Pickle files
+*.pkl
+
+# Martingale analysis (unrelated to main feature)
+Martingale_Series_Analysis.xlsx
+martingale_analysis.py

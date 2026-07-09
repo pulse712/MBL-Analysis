@@ -5,12 +5,17 @@ import streamlit as st
 import pandas as pd
 import xlsxwriter
 import io
+import os
 from datetime import date, datetime
 from daily_report import (
     load_historical_data, fetch_recent_results, compute_all_states,
     fetch_todays_schedule, get_team_state, build_game_row,
     check_scenarios, API_TO_CANONICAL, SCENARIO_DEFS,
     NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line
+)
+from master_results_manager import (
+    initialize_master_results, load_master_results, 
+    get_master_results_path, MASTER_FILE
 )
 
 st.set_page_config(page_title="MLB Daily Betting Report", page_icon="⚾", layout="wide")
@@ -177,18 +182,27 @@ def build_report_bytes(games, triggers, report_date, odds):
     fppct=wb.add_format({"font_size":10,"num_format":"0.000","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fpmny=wb.add_format({"font_size":10,"num_format":"$#,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fptot=wb.add_format({"bold":True,"font_size":10,"font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    w5.set_row(0,28); w5.set_row(1,16)
+    fpnote=wb.add_format({"font_size":10,"font_name":"Calibri","italic":True,"font_color":"#7D5A00","bg_color":"#FFF9E6","align":"left","valign":"vcenter","border":1,"text_wrap":True,"indent":1})
+    
+    w5.set_row(0,28); w5.set_row(1,16); w5.set_row(2,16); w5.set_row(3,16)
     w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
-    w5.merge_range(1,0,1,7,"Updates automatically as you enter results in the Results Tracker tab.",fps)
-    w5.set_row(2,20)
+    w5.merge_range(1,0,1,7,"⚠️  IMPORTANT: Copy results from 'Results Tracker' tab to Master_Results.xlsx to update cumulative stats",fps)
+    w5.merge_range(2,0,2,7,f"Master file location: {os.path.abspath(MASTER_FILE)}",fpnote)
+    w5.merge_range(3,0,3,7,"After copying today's results, reopen this report to see updated cumulative statistics",fpnote)
+    
+    w5.set_row(4,20)
     for ci,h in enumerate(["#","Scenario Name","Classification","W","L","Total","Win%","Net P/L"]):
-        w5.write(2,ci,h,fph)
-    w5.freeze_panes(3,0)
-    tsheet="'Results Tracker'"; tend=max(tr+500,1000)
+        w5.write(4,ci,h,fph)
+    w5.freeze_panes(5,0)
+    
+    # Reference external Master_Results.xlsx file
+    master_file_abs = os.path.abspath(MASTER_FILE).replace('\\', '/')
+    tsheet=f"'[Master_Results.xlsx]Master Results'"; tend=10000
     sc=tsheet+'!F$4:F$'+str(tend)
     rc=tsheet+'!H$4:H$'+str(tend)
     pc=tsheet+'!I$4:I$'+str(tend)
-    pr=3
+    
+    pr=5
     from daily_report import SCENARIO_DEFS
     for sid,sname,verdict,_ in SCENARIO_DEFS:
         sid_str=f"#{sid} {sname}"
@@ -196,17 +210,17 @@ def build_report_bytes(games, triggers, report_date, odds):
         vlabel="CLEAR BET" if verdict=="CLEAR BET" else ("CLEAR FADE" if verdict=="CLEAR FADE" else "INCONSISTENT")
         er=pr+1
         w5.write(pr,0,sid,fps2); w5.write(pr,1,sname,fpn); w5.write(pr,2,vlabel,vfmt)
-        w5.write_formula(pr,3,'=COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"W")',fpnum)
-        w5.write_formula(pr,4,'=COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"L")',fpnum)
+        w5.write_formula(pr,3,'=IFERROR(COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"W"),0)',fpnum)
+        w5.write_formula(pr,4,'=IFERROR(COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"L"),0)',fpnum)
         w5.write_formula(pr,5,f'=D{er}+E{er}',fpnum)
         w5.write_formula(pr,6,f'=IF(F{er}>0,D{er}/F{er},"")',fppct)
-        w5.write_formula(pr,7,'=SUMPRODUCT(('+sc+'="'+sid_str+'")*ISNUMBER(MATCH('+rc+',{"W","L"},0))*('+pc+'))',fpmny)
+        w5.write_formula(pr,7,'=IFERROR(SUMPRODUCT(('+sc+'="'+sid_str+'")*ISNUMBER(MATCH('+rc+',{"W","L"},0))*('+pc+')),0)',fpmny)
         pr+=1
     w5.set_row(pr,20)
     for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "SEASON TOTALS",fptot)
-    w5.write_formula(pr,3,f"=SUM(D4:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E4:E{pr})",fptot)
-    w5.write_formula(pr,5,f"=SUM(F4:F{pr})",fptot)
-    w5.write_formula(pr,7,f"=SUM(H4:H{pr})",fptot)
+    w5.write_formula(pr,3,f"=SUM(D5:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E5:E{pr})",fptot)
+    w5.write_formula(pr,5,f"=SUM(F5:F{pr})",fptot)
+    w5.write_formula(pr,7,f"=SUM(H5:H{pr})",fptot)
 
     wb.close(); output.seek(0)
     return output.getvalue(), n0+n1+n2, n1, n2
@@ -343,3 +357,97 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
     st.download_button(label="📥 Download Excel Report", data=excel_bytes, file_name=fname,
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         use_container_width=True, type="primary")
+
+    # Master Results File Management
+    st.markdown("---")
+    st.subheader("📊 Cumulative Season Tracking")
+    
+    # Initialize master file if it doesn't exist
+    if not os.path.exists(MASTER_FILE):
+        if st.button("🆕 Create Master Results File", type="secondary", use_container_width=True):
+            initialize_master_results()
+            st.success(f"✓ Created {MASTER_FILE}")
+            st.info(f"📂 Location: {get_master_results_path()}")
+            st.rerun()
+    else:
+        # Show master file status
+        master_df = load_master_results()
+        if master_df is not None and not master_df.empty:
+            st.success(f"✓ Master Results File: {len(master_df)} total results tracked")
+            
+            with st.expander("📈 View Master Results Summary", expanded=False):
+                # Show summary stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    total_w = (master_df['Result'] == 'W').sum()
+                    st.metric("Total Wins", total_w)
+                with col2:
+                    total_l = (master_df['Result'] == 'L').sum()
+                    st.metric("Total Losses", total_l)
+                with col3:
+                    if (total_w + total_l) > 0:
+                        win_pct = total_w / (total_w + total_l)
+                        st.metric("Win %", f"{win_pct:.1%}")
+                    else:
+                        st.metric("Win %", "N/A")
+                
+                # Show net P/L if available
+                completed = master_df[master_df['Result'].isin(['W', 'L'])]
+                if not completed.empty and 'Net P/L' in completed.columns:
+                    total_pl = completed['Net P/L'].sum()
+                    st.metric("Total Net P/L", f"${total_pl:,.2f}")
+        else:
+            st.info(f"📂 Master Results File exists but is empty")
+        
+        st.info(f"📂 File Location: `{get_master_results_path()}`")
+    
+    # Instructions
+    with st.expander("📖 How to Track Cumulative Results", expanded=False):
+        st.markdown("""
+        ### 📋 Instructions for Season-Long Tracking
+        
+        The **Scenario Performance** tab in your daily reports shows cumulative statistics 
+        that update as you track results throughout the season.
+        
+        #### Step-by-Step Process:
+        
+        1. **Download Today's Report** ⬆️
+           - Click "Download Excel Report" button above
+           
+        2. **Open Master_Results.xlsx** 📂
+           - Location shown above (in same folder as this app)
+           - If file doesn't exist, click "Create Master Results File" button
+           
+        3. **Copy Today's Results** 📋
+           - Open your downloaded daily report
+           - Go to "Results Tracker" tab
+           - Select all rows with today's triggers (rows 4 onwards)
+           - Copy them (Ctrl+C or Cmd+C)
+           
+        4. **Paste into Master File** 📥
+           - Open Master_Results.xlsx
+           - Go to "Master Results" tab
+           - Find the first empty row
+           - Paste (Ctrl+V or Cmd+V)
+           - Save the file
+           
+        5. **Track Game Results** ✅
+           - As games complete, enter **W** or **L** in the "Result" column
+           - Net P/L calculates automatically
+           
+        6. **View Cumulative Stats** 📊
+           - Open any daily report's "Scenario Performance" tab
+           - It will show cumulative stats from Master_Results.xlsx
+           - Stats update automatically when Master file is saved
+        
+        #### 💡 Tips:
+        - Keep Master_Results.xlsx in the **same folder** as your daily reports
+        - Don't delete or rename the Master file
+        - You can track results at any time - doesn't have to be immediate
+        - The Scenario Performance tab will show zeros until you have results in the Master file
+        
+        #### ⚠️ Important:
+        - Each daily report is independent - the cumulative stats come from Master_Results.xlsx
+        - You must copy results to the Master file for season-long tracking
+        - Keep the Master file backed up!
+        """)
