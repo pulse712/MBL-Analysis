@@ -265,6 +265,39 @@ edited = st.data_editor(
 
 st.markdown("---")
 
+# ── CUMULATIVE TRACKING — upload lives here, always visible ───────
+st.subheader("📊 Cumulative Season Tracking")
+st.caption("Upload your saved Master_Results.xlsx to preserve previous results. Then generate today's report and download the updated file.")
+
+uploaded = st.file_uploader(
+    "📤 Upload Master_Results.xlsx (optional — skip if starting fresh)",
+    type=['xlsx'], key='master_upload'
+)
+
+existing_master_df = None
+if uploaded is not None:
+    try:
+        existing_master_df = pd.read_excel(uploaded, sheet_name='Master Results', skiprows=2)
+        existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
+        existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
+        st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file")
+    except Exception as e:
+        st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
+        existing_master_df = None
+
+with st.expander("ℹ️ How cumulative tracking works", expanded=False):
+    st.markdown("""
+    **Simple 3-step workflow:**
+    1. **Upload** your saved `Master_Results.xlsx` here (if you have one from a previous session)
+    2. **Generate** today's report — new triggers are added automatically, old results preserved
+    3. **Download** the updated `Master_Results.xlsx` → open it → enter **W** or **L** → save it
+    4. **Next time** — upload that same file again before generating
+
+    The file grows across the season as your full record. No server storage needed.
+    """)
+
+st.markdown("---")
+
 if st.button("⚾ Generate Daily Report", type="primary", use_container_width=True):
     odds = {}
     for _, row in edited.iterrows():
@@ -355,10 +388,9 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         use_container_width=True, type="primary")
 
-    # ── CUMULATIVE TRACKING (cloud-friendly: upload/download) ──────
+    # ── CUMULATIVE TRACKING — download updated master file ─────────
     st.markdown("---")
-    st.subheader("📊 Cumulative Season Tracking")
-    st.caption("Upload your Master Results file to enter W/L results and view cumulative stats. Download it to save your progress.")
+    st.subheader("📊 Download Updated Master Results")
 
     def build_master_file(existing_df=None):
         """Build a fresh Master_Results.xlsx in memory, pre-populated with today's triggers
@@ -525,23 +557,6 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         out.seek(0)
         return out.getvalue()
 
-    # Upload existing master file
-    uploaded = st.file_uploader(
-        "📤 Upload your Master_Results.xlsx to update with today's results",
-        type=['xlsx'], key='master_upload'
-    )
-
-    existing_master_df = None
-    if uploaded is not None:
-        try:
-            existing_master_df = pd.read_excel(uploaded, sheet_name='Master Results', skiprows=2)
-            existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
-            existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
-            st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file")
-        except Exception as e:
-            st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
-            existing_master_df = None
-
     master_bytes = build_master_file(existing_master_df)
     st.download_button(
         label="📥 Download Master_Results.xlsx  (open → enter W/L → re-upload next time)",
@@ -551,16 +566,7 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         use_container_width=True,
     )
 
-    with st.expander("ℹ️ How cumulative tracking works", expanded=False):
-        st.markdown("""
-        **Simple 3-step workflow:**
-        1. **Download** `Master_Results.xlsx` after generating each daily report
-        2. **Open the file** → enter **W** or **L** in the Result column as games complete → **Save**
-        3. **Next time** — upload your saved Master file here before generating the report.
-           Today's new triggers are added automatically and your old results are preserved.
 
-        The file grows over the season as your full record. No server storage needed.
-        """)
 
 
 # ── SCENARIO PERFORMANCE HEATMAP ─────────────────────────────────
