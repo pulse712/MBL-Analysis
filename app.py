@@ -265,12 +265,12 @@ odds_df = pd.DataFrame(odds_data)
 edited = st.data_editor(
     odds_df,
     column_config={
-        'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width='large'),
-        'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width='large'),
-        'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width='medium'),
-        'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width='medium'),
+        'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width='medium'),
+        'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width='medium'),
+        'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width='small'),
+        'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width='small'),
     },
-    hide_index=True, use_container_width=True,
+    hide_index=True, use_container_width=False,
 )
 
 st.markdown("---")
@@ -393,14 +393,14 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
                 'Play': ht[0]['play'] if ht else '',
                 'Scenario': f"#{ht[0]['scenario_id']} {ht[0]['scenario']}" if ht else ''})
         if game_rows:
-            st.dataframe(pd.DataFrame(game_rows), use_container_width=True, hide_index=True,
+            st.dataframe(pd.DataFrame(game_rows), use_container_width=False, hide_index=True,
                 column_config={
-                    'GAME': st.column_config.TextColumn('GAME', width='large'),
+                    'GAME': st.column_config.TextColumn('GAME', width='medium'),
                     'H/A': st.column_config.TextColumn('H/A', width='small'),
-                    'Team': st.column_config.TextColumn('Team', width='medium'),
+                    'Team': st.column_config.TextColumn('Team', width='small'),
                     'Odds': st.column_config.TextColumn('Odds', width='small'),
-                    'Play': st.column_config.TextColumn('Play', width='medium'),
-                    'Scenario': st.column_config.TextColumn('Scenario', width='large'),
+                    'Play': st.column_config.TextColumn('Play', width='small'),
+                    'Scenario': st.column_config.TextColumn('Scenario', width='medium'),
                 })
 
     st.markdown("---")
@@ -715,16 +715,16 @@ with st.expander("Click to view heatmap", expanded=False):
 
         st.dataframe(
             styled,
-            use_container_width=True,
+            use_container_width=False,
             hide_index=True,
             column_config={
-                '#':        st.column_config.TextColumn('#', width=55),
-                'Scenario': st.column_config.TextColumn('Scenario', width='large'),
-                'Type':     st.column_config.TextColumn('Type', width='medium'),
-                'Games':    st.column_config.NumberColumn('Games', width=70),
-                'W':        st.column_config.NumberColumn('W', width=55),
-                'L':        st.column_config.NumberColumn('L', width=55),
-                'Win%':     st.column_config.TextColumn('Win %', width=75),
+                '#':        st.column_config.TextColumn('#', width=40),
+                'Scenario': st.column_config.TextColumn('Scenario', width='medium'),
+                'Type':     st.column_config.TextColumn('Type', width='small'),
+                'Games':    st.column_config.NumberColumn('Games', width=60),
+                'W':        st.column_config.NumberColumn('W', width=45),
+                'L':        st.column_config.NumberColumn('L', width=45),
+                'Win%':     st.column_config.TextColumn('Win %', width=65),
             }
         )
 

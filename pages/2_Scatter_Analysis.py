@@ -441,7 +441,7 @@ if show_today and 'today_points' in dir() and today_points:
     st.dataframe(
         today_df.style.apply(highlight_zone, axis=1),
         hide_index=True,
-        use_container_width=True
+        use_container_width=False
     )
 
     above_today = [p for p in today_points if p['above_line']]
