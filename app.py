@@ -17,6 +17,16 @@ from daily_report import (
 
 st.set_page_config(page_title="MLB Daily Betting Report", page_icon="⚾", layout="wide")
 
+# Narrow the sidebar
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {
+        min-width: 220px !important;
+        max-width: 220px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 @st.cache_data(ttl=3600, show_spinner="Loading historical data...")
 def load_enriched_data(report_date_str):
     df = load_historical_data()
