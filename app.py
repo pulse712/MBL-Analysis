@@ -13,10 +13,7 @@ from daily_report import (
     check_scenarios, API_TO_CANONICAL, SCENARIO_DEFS,
     NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line
 )
-from master_results_manager import (
-    initialize_master_results, load_master_results, 
-    get_master_results_path, MASTER_FILE
-)
+
 
 st.set_page_config(page_title="MLB Daily Betting Report", page_icon="⚾", layout="wide")
 
@@ -179,30 +176,28 @@ def build_report_bytes(games, triggers, report_date, odds):
     fpfade=wb.add_format({"font_size":9,"bold":True,"font_color":"#C00000","bg_color":"#FFE7E7","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fpinc=wb.add_format({"font_size":9,"bold":True,"font_color":"#7D5A00","bg_color":"#FFF3CC","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fpnum=wb.add_format({"font_size":10,"bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fppct=wb.add_format({"font_size":10,"num_format":"0.000","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
+    fppct=wb.add_format({"font_size":10,"num_format":"0.0%","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fpmny=wb.add_format({"font_size":10,"num_format":"$#,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
     fptot=wb.add_format({"bold":True,"font_size":10,"font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpnote=wb.add_format({"font_size":10,"font_name":"Calibri","italic":True,"font_color":"#7D5A00","bg_color":"#FFF9E6","align":"left","valign":"vcenter","border":1,"text_wrap":True,"indent":1})
-    
-    w5.set_row(0,28); w5.set_row(1,16); w5.set_row(2,16); w5.set_row(3,16)
+    fpnote=wb.add_format({"font_size":9,"font_name":"Calibri","italic":True,"font_color":"#7D5A00","bg_color":"#FFF9E6","align":"center","valign":"vcenter","border":1,"text_wrap":True})
+
+    w5.set_row(0,28); w5.set_row(1,16); w5.set_row(2,22)
     w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
-    w5.merge_range(1,0,1,7,"⚠️  IMPORTANT: Copy results from 'Results Tracker' tab to Master_Results.xlsx to update cumulative stats",fps)
-    w5.merge_range(2,0,2,7,f"Master file location: {os.path.abspath(MASTER_FILE)}",fpnote)
-    w5.merge_range(3,0,3,7,"After copying today's results, reopen this report to see updated cumulative statistics",fpnote)
-    
-    w5.set_row(4,20)
+    w5.merge_range(1,0,1,7,"Stats below are for TODAY only. Upload Master_Results.xlsx in the app for season-long tracking.",fps)
+    w5.merge_range(2,0,2,7,"To update season totals: open the app → upload your Master_Results.xlsx → download the updated file → enter W/L results.",fpnote)
+    w5.set_row(3,20)
     for ci,h in enumerate(["#","Scenario Name","Classification","W","L","Total","Win%","Net P/L"]):
-        w5.write(4,ci,h,fph)
-    w5.freeze_panes(5,0)
-    
-    # Reference external Master_Results.xlsx file
-    master_file_abs = os.path.abspath(MASTER_FILE).replace('\\', '/')
-    tsheet=f"'[Master_Results.xlsx]Master Results'"; tend=10000
-    sc=tsheet+'!F$4:F$'+str(tend)
-    rc=tsheet+'!H$4:H$'+str(tend)
-    pc=tsheet+'!I$4:I$'+str(tend)
-    
-    pr=5
+        w5.write(3,ci,h,fph)
+    w5.freeze_panes(4,0)
+
+    # Reference internal Results Tracker for today's data
+    tsheet = "'Results Tracker'"
+    tend = max(tr + 50, 200)
+    sc = tsheet + '!F$4:F$' + str(tend)
+    rc = tsheet + '!H$4:H$' + str(tend)
+    pc = tsheet + '!I$4:I$' + str(tend)
+
+    pr=4
     from daily_report import SCENARIO_DEFS
     for sid,sname,verdict,_ in SCENARIO_DEFS:
         sid_str=f"#{sid} {sname}"
@@ -217,10 +212,10 @@ def build_report_bytes(games, triggers, report_date, odds):
         w5.write_formula(pr,7,'=IFERROR(SUMPRODUCT(('+sc+'="'+sid_str+'")*ISNUMBER(MATCH('+rc+',{"W","L"},0))*('+pc+')),0)',fpmny)
         pr+=1
     w5.set_row(pr,20)
-    for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "SEASON TOTALS",fptot)
-    w5.write_formula(pr,3,f"=SUM(D5:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E5:E{pr})",fptot)
-    w5.write_formula(pr,5,f"=SUM(F5:F{pr})",fptot)
-    w5.write_formula(pr,7,f"=SUM(H5:H{pr})",fptot)
+    for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "TODAY TOTALS",fptot)
+    w5.write_formula(pr,3,f"=SUM(D4:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E4:E{pr})",fptot)
+    w5.write_formula(pr,5,f"=SUM(F4:F{pr})",fptot)
+    w5.write_formula(pr,7,f"=SUM(H4:H{pr})",fptot)
 
     wb.close(); output.seek(0)
     return output.getvalue(), n0+n1+n2, n1, n2
@@ -249,6 +244,153 @@ if not games:
 
 st.success(f"✓ {len(games)} games scheduled for {report_date.strftime('%A, %B %d, %Y')}")
 st.markdown("---")
+
+# ── SCENARIO HEATMAP (always visible) ────────────────────────────
+with st.expander("🔥 Scenario Performance Heatmap  (2023–2026 Historical Backtest)", expanded=False):
+    st.caption("Win % by scenario, color-coded from red (low) → yellow → green (high). Based on historical data.")
+
+    @st.cache_data(show_spinner="Building heatmap...")
+    def build_heatmap_data(enriched_date_str):
+        """Run all 36 scenarios against historical data and return a summary DataFrame."""
+        from daily_report import SCENARIO_DEFS, NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, DIVISIONS
+        import numpy as np
+
+        df = load_enriched_data(enriched_date_str)
+
+        # Build opponent streak and road win% lookups for the full dataset
+        all_teams = df['team'].unique()
+        opp_streaks_all = {}
+        opp_road_wpct_all = {}
+        for team in all_teams:
+            tdf = df[df['team'] == team].sort_values('date')
+            if not tdf.empty:
+                last = tdf.iloc[-1]
+                sb = last['streak_before']; res = last['result']
+                opp_streaks_all[team] = (sb+1 if sb>=0 else 1) if res=='W' else (sb-1 if sb<=0 else -1)
+                road = tdf[tdf['home_away']=='away']
+                if not road.empty:
+                    rw = (road['result']=='W').sum(); rl = (road['result']=='L').sum()
+                    opp_road_wpct_all[team] = rw/(rw+rl) if (rw+rl)>0 else None
+
+        rows = []
+        for sid, sname, verdict, func in SCENARIO_DEFS:
+            matched = []
+            for _, row in df.iterrows():
+                if row.get('result') not in ('W', 'L'):
+                    continue
+                r = dict(row)
+                try:
+                    if sid in NEEDS_OPP_STREAK:
+                        fired = func(r, opp_streaks_all)
+                    elif sid in NEEDS_OPP_ROAD_WP:
+                        fired = func(r, opp_road_wpct_all)
+                    else:
+                        fired = func(r)
+                except Exception:
+                    fired = False
+                if fired:
+                    matched.append(row['result'])
+
+            total = len(matched)
+            wins  = matched.count('W')
+            losses= matched.count('L')
+            win_pct = wins / total if total > 0 else None
+
+            rows.append({
+                'ID':          sid,
+                'Scenario':    sname,
+                'Type':        verdict,
+                'Games':       total,
+                'W':           wins,
+                'L':           losses,
+                'Win%':        round(win_pct * 100, 1) if win_pct is not None else None,
+            })
+
+        return pd.DataFrame(rows)
+
+    heatmap_df = build_heatmap_data(report_date_str)
+
+    if not heatmap_df.empty:
+        # Color mapping helper
+        def winpct_color(val, vtype):
+            """Return hex bg color based on win% and verdict type."""
+            if val is None:
+                return '#F0F0F0'
+            if vtype == 'CLEAR FADE':
+                # For fades lower win% = better — invert
+                if val <= 40:   return '#C6EFCE'  # green = good fade
+                elif val <= 48: return '#FFEB9C'  # yellow
+                else:           return '#FFC7CE'  # red = bad
+            else:
+                if val >= 60:   return '#C6EFCE'
+                elif val >= 50: return '#FFEB9C'
+                else:           return '#FFC7CE'
+
+        # Sort by Win%
+        sort_col = st.selectbox("Sort by:", ["Win% (High→Low)", "Win% (Low→High)", "Scenario #", "Games (Most→Fewest)"],
+                                index=0, key='heatmap_sort')
+        if sort_col == "Win% (High→Low)":
+            heatmap_df = heatmap_df.sort_values('Win%', ascending=False, na_position='last')
+        elif sort_col == "Win% (Low→High)":
+            heatmap_df = heatmap_df.sort_values('Win%', ascending=True, na_position='last')
+        elif sort_col == "Games (Most→Fewest)":
+            heatmap_df = heatmap_df.sort_values('Games', ascending=False)
+        else:
+            heatmap_df = heatmap_df.sort_values('ID')
+
+        type_filter = st.multiselect("Filter by type:", ['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'],
+                                     default=['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'], key='heatmap_filter')
+        heatmap_df = heatmap_df[heatmap_df['Type'].isin(type_filter)]
+
+        # Render as styled dataframe using background_gradient per row
+        def style_row(row):
+            color = winpct_color(row['Win%'], row['Type'])
+            type_color = {'CLEAR BET': '#C6EFCE', 'CLEAR FADE': '#FFC7CE', 'INCONSISTENT': '#FFEB9C'}
+            tc = type_color.get(row['Type'], '#FFFFFF')
+            return [
+                'background-color: #EDF3FB',       # ID
+                'background-color: #EDF3FB',       # Scenario
+                f'background-color: {tc}; font-weight: bold',  # Type
+                'background-color: #EDF3FB',       # Games
+                'background-color: #E2EFDA',       # W
+                'background-color: #FFE7E7',       # L
+                f'background-color: {color}; font-weight: bold',  # Win%
+            ]
+
+        display_df = heatmap_df.copy()
+        display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1f}%" if x is not None else "—")
+
+        styled = display_df.style.apply(style_row, axis=1)
+
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'ID':       st.column_config.TextColumn('#', width='small'),
+                'Scenario': st.column_config.TextColumn('Scenario Name', width='large'),
+                'Type':     st.column_config.TextColumn('Type', width='medium'),
+                'Games':    st.column_config.NumberColumn('Games', width='small'),
+                'W':        st.column_config.NumberColumn('W', width='small'),
+                'L':        st.column_config.NumberColumn('L', width='small'),
+                'Win%':     st.column_config.TextColumn('Win %', width='small'),
+            }
+        )
+
+        # Mini summary bar
+        has_data = heatmap_df[heatmap_df['Games'] > 0]
+        if not has_data.empty:
+            c1, c2, c3 = st.columns(3)
+            best = has_data.loc[has_data['Win%'].idxmax()] if not has_data['Win%'].isna().all() else None
+            worst = has_data.loc[has_data['Win%'].idxmin()] if not has_data['Win%'].isna().all() else None
+            if best is not None:
+                c1.success(f"🏆 Best: #{best['ID']} — {best['Win%']:.1f}%")
+            if worst is not None:
+                c2.error(f"⚠️ Lowest: #{worst['ID']} — {worst['Win%']:.1f}%")
+            c3.info(f"📊 {len(has_data)} scenarios with data ({has_data['Games'].sum():,} total games)")
+
+st.markdown("---")
+
 
 st.subheader("📋 Enter Today's Moneylines")
 st.caption("Enter the moneyline for each team (e.g. 130 for +130, -150 for -150). Leave blank if unavailable.")
@@ -358,96 +500,209 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         use_container_width=True, type="primary")
 
-    # Master Results File Management
+    # ── CUMULATIVE TRACKING (cloud-friendly: upload/download) ──────
     st.markdown("---")
     st.subheader("📊 Cumulative Season Tracking")
-    
-    # Initialize master file if it doesn't exist
-    if not os.path.exists(MASTER_FILE):
-        if st.button("🆕 Create Master Results File", type="secondary", use_container_width=True):
-            initialize_master_results()
-            st.success(f"✓ Created {MASTER_FILE}")
-            st.info(f"📂 Location: {get_master_results_path()}")
-            st.rerun()
-    else:
-        # Show master file status
-        master_df = load_master_results()
-        if master_df is not None and not master_df.empty:
-            st.success(f"✓ Master Results File: {len(master_df)} total results tracked")
-            
-            with st.expander("📈 View Master Results Summary", expanded=False):
-                # Show summary stats
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    total_w = (master_df['Result'] == 'W').sum()
-                    st.metric("Total Wins", total_w)
-                with col2:
-                    total_l = (master_df['Result'] == 'L').sum()
-                    st.metric("Total Losses", total_l)
-                with col3:
-                    if (total_w + total_l) > 0:
-                        win_pct = total_w / (total_w + total_l)
-                        st.metric("Win %", f"{win_pct:.1%}")
+    st.caption("Upload your Master Results file to enter W/L results and view cumulative stats. Download it to save your progress.")
+
+    def build_master_file(existing_df=None):
+        """Build a fresh Master_Results.xlsx in memory, pre-populated with today's triggers
+        plus any previously uploaded results, and return the bytes."""
+        out = io.BytesIO()
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Master Results'
+
+        NAVY_FILL  = PatternFill('solid', fgColor='1B2A4A')
+        GREEN_FILL = PatternFill('solid', fgColor='375623')
+        INPUT_FILL = PatternFill('solid', fgColor='EAF4E8')
+        thin = lambda c: Side(style='thin', color=c)
+        std_border = Border(left=thin('C6EFCE'), right=thin('C6EFCE'),
+                            top=thin('C6EFCE'),  bottom=thin('C6EFCE'))
+        input_border = Border(left=thin('375623'), right=thin('375623'),
+                              top=thin('375623'),  bottom=thin('375623'))
+
+        ws.column_dimensions['A'].width = 12
+        ws.column_dimensions['B'].width = 26
+        ws.column_dimensions['C'].width = 10
+        ws.column_dimensions['D'].width = 10
+        ws.column_dimensions['E'].width = 14
+        ws.column_dimensions['F'].width = 40
+        ws.column_dimensions['G'].width = 14
+        ws.column_dimensions['H'].width = 14
+        ws.column_dimensions['I'].width = 16
+
+        # Title
+        ws.merge_cells('A1:I1')
+        c = ws['A1']
+        c.value = 'MASTER RESULTS TRACKER  —  Season Cumulative'
+        c.font = Font(bold=True, size=14, color='FFFFFF', name='Calibri')
+        c.fill = NAVY_FILL
+        c.alignment = Alignment(horizontal='center', vertical='center')
+        ws.row_dimensions[1].height = 28
+
+        # Subtitle
+        ws.merge_cells('A2:I2')
+        c = ws['A2']
+        c.value = 'Enter W or L in column H after each game. Net P/L calculates automatically.'
+        c.font = Font(italic=True, size=10, color='D0E4F5', name='Calibri')
+        c.fill = NAVY_FILL
+        c.alignment = Alignment(horizontal='center', vertical='center')
+        ws.row_dimensions[2].height = 16
+
+        # Headers
+        headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=3, column=col)
+            c.value = h
+            c.font = Font(bold=True, color='FFFFFF', name='Calibri')
+            c.fill = GREEN_FILL
+            c.alignment = Alignment(horizontal='center', vertical='center')
+            c.border = Border(left=thin('000000'), right=thin('000000'),
+                              top=thin('000000'), bottom=thin('000000'))
+        ws.row_dimensions[3].height = 24
+        ws.freeze_panes = 'A4'
+
+        # Build rows: existing results (preserves W/L) + new triggers not already present
+        existing_rows = []
+        existing_keys = set()
+
+        if existing_df is not None and not existing_df.empty:
+            for _, row in existing_df.iterrows():
+                existing_rows.append(row)
+                existing_keys.add((str(row.get('Date','')), str(row.get('Team','')), str(row.get('Scenario',''))))
+
+        # Add today's triggers if not already in the file
+        today_str = report_date.strftime('%Y-%m-%d')
+        for t in all_triggers:
+            scen_str = f"#{t['scenario_id']} {t['scenario']}"
+            key = (today_str, title_case(t['team']), scen_str)
+            if key not in existing_keys:
+                existing_rows.append({
+                    'Date': today_str,
+                    'Team': title_case(t['team']),
+                    'H/A':  t['home_away'].upper(),
+                    'Odds': fmt_line(t['line']),
+                    'Play': t['play'],
+                    'Scenario': scen_str,
+                    'Type':   t['verdict'],
+                    'Result': '',
+                    'Net P/L': None,
+                    '_line': t['line'],
+                })
+
+        for i, row in enumerate(existing_rows):
+            r = i + 4  # excel row (1-indexed), data starts at row 4
+            line_val = row.get('_line', None)
+            result   = str(row.get('Result', '')).strip().upper()
+
+            ws.cell(r, 1).value = str(row.get('Date', ''))
+            ws.cell(r, 2).value = str(row.get('Team', ''))
+            ws.cell(r, 3).value = str(row.get('H/A', ''))
+            ws.cell(r, 4).value = str(row.get('Odds', ''))
+            ws.cell(r, 5).value = str(row.get('Play', ''))
+            ws.cell(r, 6).value = str(row.get('Scenario', ''))
+            ws.cell(r, 7).value = str(row.get('Type', ''))
+
+            # Result cell (highlighted for user input)
+            rc = ws.cell(r, 8)
+            rc.value = result if result in ('W', 'L') else ''
+            rc.fill = INPUT_FILL
+            rc.font = Font(bold=True, name='Calibri')
+            rc.alignment = Alignment(horizontal='center', vertical='center')
+            rc.border = input_border
+
+            # Net P/L — compute directly (no formulas, works without Excel)
+            nc = ws.cell(r, 9)
+            if result in ('W', 'L'):
+                try:
+                    ln = int(line_val) if line_val is not None else None
+                    if ln is None:
+                        # Try parsing stored odds string like "+130" or "-150"
+                        odds_str = str(row.get('Odds', '')).replace('+', '')
+                        ln = int(odds_str) if odds_str not in ('', 'N/A', 'None') else None
+                    if ln is not None:
+                        if result == 'W':
+                            nc.value = round(ln * (100 / abs(ln)) if ln < 0 else ln, 2)
+                        else:
+                            nc.value = -100.0
                     else:
-                        st.metric("Win %", "N/A")
-                
-                # Show net P/L if available
-                completed = master_df[master_df['Result'].isin(['W', 'L'])]
-                if not completed.empty and 'Net P/L' in completed.columns:
-                    total_pl = completed['Net P/L'].sum()
-                    st.metric("Total Net P/L", f"${total_pl:,.2f}")
-        else:
-            st.info(f"📂 Master Results File exists but is empty")
-        
-        st.info(f"📂 File Location: `{get_master_results_path()}`")
-    
-    # Instructions
-    with st.expander("📖 How to Track Cumulative Results", expanded=False):
+                        nc.value = ''
+                except Exception:
+                    nc.value = ''
+            else:
+                nc.value = ''
+            nc.alignment = Alignment(horizontal='center', vertical='center')
+            nc.border = std_border
+
+            for col in range(1, 8):
+                c = ws.cell(r, col)
+                c.alignment = Alignment(horizontal='center' if col != 2 else 'left',
+                                        vertical='center')
+                c.border = std_border
+
+        # Totals row
+        last_data = len(existing_rows) + 3
+        if existing_rows:
+            tr = last_data + 1
+            ws.merge_cells(f'A{tr}:H{tr}')
+            tc = ws[f'A{tr}']
+            tc.value = 'TOTAL NET P/L'
+            tc.font = Font(bold=True, color='FFFFFF', name='Calibri')
+            tc.fill = GREEN_FILL
+            tc.alignment = Alignment(horizontal='center', vertical='center')
+            # Sum P/L
+            total_pl = sum(
+                (ws.cell(i + 4, 9).value or 0)
+                for i in range(len(existing_rows))
+                if isinstance(ws.cell(i + 4, 9).value, (int, float))
+            )
+            tc2 = ws.cell(tr, 9)
+            tc2.value = round(total_pl, 2)
+            tc2.font = Font(bold=True, color='FFFFFF', name='Calibri')
+            tc2.fill = GREEN_FILL
+            tc2.alignment = Alignment(horizontal='center', vertical='center')
+
+        wb.save(out)
+        out.seek(0)
+        return out.getvalue()
+
+    # Upload existing master file
+    uploaded = st.file_uploader(
+        "📤 Upload your Master_Results.xlsx to update with today's results",
+        type=['xlsx'], key='master_upload'
+    )
+
+    existing_master_df = None
+    if uploaded is not None:
+        try:
+            existing_master_df = pd.read_excel(uploaded, sheet_name='Master Results', skiprows=2)
+            existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
+            existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
+            st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file")
+        except Exception as e:
+            st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
+            existing_master_df = None
+
+    master_bytes = build_master_file(existing_master_df)
+    st.download_button(
+        label="📥 Download Master_Results.xlsx  (open → enter W/L → re-upload next time)",
+        data=master_bytes,
+        file_name='Master_Results.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        use_container_width=True,
+    )
+
+    with st.expander("ℹ️ How cumulative tracking works", expanded=False):
         st.markdown("""
-        ### 📋 Instructions for Season-Long Tracking
-        
-        The **Scenario Performance** tab in your daily reports shows cumulative statistics 
-        that update as you track results throughout the season.
-        
-        #### Step-by-Step Process:
-        
-        1. **Download Today's Report** ⬆️
-           - Click "Download Excel Report" button above
-           
-        2. **Open Master_Results.xlsx** 📂
-           - Location shown above (in same folder as this app)
-           - If file doesn't exist, click "Create Master Results File" button
-           
-        3. **Copy Today's Results** 📋
-           - Open your downloaded daily report
-           - Go to "Results Tracker" tab
-           - Select all rows with today's triggers (rows 4 onwards)
-           - Copy them (Ctrl+C or Cmd+C)
-           
-        4. **Paste into Master File** 📥
-           - Open Master_Results.xlsx
-           - Go to "Master Results" tab
-           - Find the first empty row
-           - Paste (Ctrl+V or Cmd+V)
-           - Save the file
-           
-        5. **Track Game Results** ✅
-           - As games complete, enter **W** or **L** in the "Result" column
-           - Net P/L calculates automatically
-           
-        6. **View Cumulative Stats** 📊
-           - Open any daily report's "Scenario Performance" tab
-           - It will show cumulative stats from Master_Results.xlsx
-           - Stats update automatically when Master file is saved
-        
-        #### 💡 Tips:
-        - Keep Master_Results.xlsx in the **same folder** as your daily reports
-        - Don't delete or rename the Master file
-        - You can track results at any time - doesn't have to be immediate
-        - The Scenario Performance tab will show zeros until you have results in the Master file
-        
-        #### ⚠️ Important:
-        - Each daily report is independent - the cumulative stats come from Master_Results.xlsx
-        - You must copy results to the Master file for season-long tracking
-        - Keep the Master file backed up!
+        **Simple 3-step workflow:**
+        1. **Download** `Master_Results.xlsx` after generating each daily report
+        2. **Open the file** → enter **W** or **L** in the Result column as games complete → **Save**
+        3. **Next time** — upload your saved Master file here before generating the report.
+           Today's new triggers are added automatically and your old results are preserved.
+
+        The file grows over the season as your full record. No server storage needed.
         """)
