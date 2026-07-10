@@ -14,11 +14,6 @@ import os
 from datetime import date, timedelta
 import requests
 
-st.set_page_config(
-    page_title="Scatter Analysis — MLB Betting",
-    page_icon="📊",
-    layout="wide"
-)
 
 # Narrow the sidebar
 st.markdown("""
