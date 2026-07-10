@@ -280,10 +280,21 @@ if uploaded is not None:
         existing_master_df = pd.read_excel(uploaded, sheet_name='Master Results', skiprows=2)
         existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
         existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
+        # Persist in session state so it survives the rerun when Generate is clicked
+        st.session_state['master_df'] = existing_master_df
         st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file")
     except Exception as e:
         st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
-        existing_master_df = None
+        st.session_state['master_df'] = None
+elif 'master_df' not in st.session_state:
+    st.session_state['master_df'] = None
+
+# Always read from session state — survives button-click reruns
+existing_master_df = st.session_state['master_df']
+
+if existing_master_df is not None and uploaded is None:
+    # File was uploaded in a previous interaction this session — show reminder
+    st.info(f"📂 Using uploaded Master file ({len(existing_master_df)} rows). Upload a new file to replace it.")
 
 with st.expander("ℹ️ How cumulative tracking works", expanded=False):
     st.markdown("""
