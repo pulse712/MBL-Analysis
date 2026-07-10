@@ -691,7 +691,8 @@ with st.expander("Click to view heatmap", expanded=False):
             hmap = hmap.sort_values('#')
 
         def _row_style(row):
-            # Win% is still numeric here — style is applied before string formatting
+            # Always set explicit dark text so colors are visible in both light and dark mode
+            BASE = 'color:#000000;font-weight:bold'
             v = row['Win%']
             vtype = row['Type']
             try:
@@ -699,19 +700,25 @@ with st.expander("Click to view heatmap", expanded=False):
             except (TypeError, ValueError):
                 v = None
             if v is None:
-                wc = 'background-color:#F0F0F0'
+                wc = f'background-color:#D0D0D0;{BASE}'
             elif vtype == 'CLEAR FADE':
-                wc = ('background-color:#C6EFCE;font-weight:bold' if v <= 42
-                      else 'background-color:#FFEB9C;font-weight:bold' if v <= 50
-                      else 'background-color:#FFC7CE;font-weight:bold')
+                wc = (f'background-color:#C6EFCE;{BASE}' if v <= 42
+                      else f'background-color:#FFEB9C;{BASE}' if v <= 50
+                      else f'background-color:#FFC7CE;{BASE}')
             else:
-                wc = ('background-color:#C6EFCE;font-weight:bold' if v >= 58
-                      else 'background-color:#FFEB9C;font-weight:bold' if v >= 50
-                      else 'background-color:#FFC7CE;font-weight:bold')
-            tc = {'CLEAR BET': 'background-color:#C6EFCE;font-weight:bold',
-                  'CLEAR FADE': 'background-color:#FFC7CE;font-weight:bold',
-                  'INCONSISTENT': 'background-color:#FFEB9C;font-weight:bold'}.get(vtype, '')
-            return ['', '', tc, '', 'background-color:#E2EFDA', 'background-color:#FFE7E7', wc]
+                wc = (f'background-color:#C6EFCE;{BASE}' if v >= 58
+                      else f'background-color:#FFEB9C;{BASE}' if v >= 50
+                      else f'background-color:#FFC7CE;{BASE}')
+            tc = {
+                'CLEAR BET':    f'background-color:#C6EFCE;{BASE}',
+                'CLEAR FADE':   f'background-color:#FFC7CE;{BASE}',
+                'INCONSISTENT': f'background-color:#FFEB9C;{BASE}',
+            }.get(vtype, '')
+            plain = f'color:#000000'
+            return [plain, plain, tc, plain,
+                    f'background-color:#E2EFDA;{BASE}',
+                    f'background-color:#FFE7E7;{BASE}',
+                    wc]
 
         # Apply styles on numeric data first, then format Win% as string for display
         disp = hmap.copy()
@@ -719,8 +726,9 @@ with st.expander("Click to view heatmap", expanded=False):
 
         st.dataframe(
             styled,
-            use_container_width=False,
+            use_container_width=True,
             hide_index=True,
+            height=(len(hmap) + 1) * 35 + 3,
             column_config={
                 '#':        st.column_config.TextColumn('#',        width=40),
                 'Scenario': st.column_config.TextColumn('Scenario', width=260),
