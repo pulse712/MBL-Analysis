@@ -265,12 +265,13 @@ odds_df = pd.DataFrame(odds_data)
 edited = st.data_editor(
     odds_df,
     column_config={
-        'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width=200),
-        'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width=200),
-        'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width=100),
-        'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width=100),
+        'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width=220),
+        'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width=220),
+        'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width=120),
+        'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width=120),
     },
-    hide_index=True, use_container_width=False,
+    hide_index=True, use_container_width=True,
+    height=(len(odds_df) + 1) * 35 + 3,
 )
 
 st.markdown("---")
@@ -393,14 +394,17 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
                 'Play': ht[0]['play'] if ht else '',
                 'Scenario': f"#{ht[0]['scenario_id']} {ht[0]['scenario']}" if ht else ''})
         if game_rows:
-            st.dataframe(pd.DataFrame(game_rows), use_container_width=False, hide_index=True,
+            n_rows = len(game_rows)
+            st.dataframe(pd.DataFrame(game_rows),
+                use_container_width=True, hide_index=True,
+                height=(n_rows + 1) * 35 + 3,
                 column_config={
-                    'GAME': st.column_config.TextColumn('GAME', width=260),
+                    'GAME': st.column_config.TextColumn('GAME', width=300),
                     'H/A':  st.column_config.TextColumn('H/A',  width=60),
-                    'Team': st.column_config.TextColumn('Team', width=160),
+                    'Team': st.column_config.TextColumn('Team', width=180),
                     'Odds': st.column_config.TextColumn('Odds', width=70),
-                    'Play': st.column_config.TextColumn('Play', width=180),
-                    'Scenario': st.column_config.TextColumn('Scenario', width=280),
+                    'Play': st.column_config.TextColumn('Play', width=200),
+                    'Scenario': st.column_config.TextColumn('Scenario', width=320),
                 })
 
     st.markdown("---")
