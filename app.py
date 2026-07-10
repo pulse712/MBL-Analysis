@@ -660,8 +660,13 @@ with st.expander("Click to view heatmap", expanded=False):
             hmap = hmap.sort_values('#')
 
         def _row_style(row):
+            # Win% is still numeric here — style is applied before string formatting
             v = row['Win%']
             vtype = row['Type']
+            try:
+                v = float(v) if v is not None else None
+            except (TypeError, ValueError):
+                v = None
             if v is None:
                 wc = 'background-color:#F0F0F0'
             elif vtype == 'CLEAR FADE':
@@ -677,11 +682,12 @@ with st.expander("Click to view heatmap", expanded=False):
                   'INCONSISTENT': 'background-color:#FFEB9C;font-weight:bold'}.get(vtype, '')
             return ['', '', tc, '', 'background-color:#E2EFDA', 'background-color:#FFE7E7', wc]
 
+        # Apply styles on numeric data first, then format Win% as string for display
         disp = hmap.copy()
-        disp['Win%'] = disp['Win%'].apply(lambda x: f"{x:.1f}%" if x is not None else "—")
+        styled = disp.style.apply(_row_style, axis=1).format({'Win%': lambda x: f"{x:.1f}%" if x is not None else "—"})
 
         st.dataframe(
-            disp.style.apply(_row_style, axis=1),
+            styled,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -696,11 +702,10 @@ with st.expander("Click to view heatmap", expanded=False):
         )
 
         has = hmap[hmap['Games'] > 0].copy()
-        has['_pct'] = has['Win%'].apply(lambda x: float(x.replace('%','')) if isinstance(x, str) else (x or 0))
-        if not has.empty:
-            best  = has.loc[has['_pct'].idxmax()]
-            worst = has.loc[has['_pct'].idxmin()]
+        if not has.empty and has['Win%'].notna().any():
+            best  = has.loc[has['Win%'].idxmax()]
+            worst = has.loc[has['Win%'].idxmin()]
             b1, b2, b3 = st.columns(3)
-            b1.success(f"🏆 Best: #{best['#']} — {best['Win%']}")
-            b2.error(f"⚠️ Lowest: #{worst['#']} — {worst['Win%']}")
+            b1.success(f"🏆 Best: #{best['#']} — {best['Win%']:.1f}%")
+            b2.error(f"⚠️ Lowest: #{worst['#']} — {worst['Win%']:.1f}%")
             b3.info(f"📊 {len(has)} scenarios · {int(hmap['Games'].sum()):,} total games")
