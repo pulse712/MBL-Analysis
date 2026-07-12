@@ -37,7 +37,7 @@ def get_schedule(report_date_str):
 
 def build_report_bytes(games, triggers, report_date, odds):
     output = io.BytesIO()
-    wb = xlsxwriter.Workbook(output, {'in_memory': True})
+    wb = xlsxwriter.Workbook(output, {'in_memory': True, 'calc_on_load': True})
     NAVY='#1B2A4A'; STEEL='#2E5F8A'; LIGHT_STEEL='#D0E4F5'
     FADE_RED='#C00000'; FADE_BG='#FFE7E7'; WATCH_AMB='#7D5A00'; WATCH_BG='#FFF3CC'
     GREEN_FG='#375623'; GREEN_BG='#E2EFDA'; AWAY_BG='#F0F5FB'; HOME_BG='#FFFFFF'; GRAY_TEXT='#666666'
