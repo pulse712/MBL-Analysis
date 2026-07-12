@@ -216,7 +216,7 @@ def build_report_bytes(games, triggers, report_date, odds):
         w5.write_formula(pr,4,'=IFERROR(COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"L"),0)',fpnum)
         w5.write_formula(pr,5,f'=D{er}+E{er}',fpnum)
         w5.write_formula(pr,6,f'=IF(F{er}>0,D{er}/F{er},"")',fppct)
-        w5.write_formula(pr,7,'=IFERROR(SUMPRODUCT(('+sc+'="'+sid_str+'")*ISNUMBER(MATCH('+rc+',{"W","L"},0))*('+pc+')),0)',fpmny)
+        w5.write_formula(pr,7,'=IFERROR(SUMIFS('+pc+','+sc+',"'+sid_str+'"),0)',fpmny)
         pr+=1
     w5.set_row(pr,20)
     for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "TODAY TOTALS",fptot)
