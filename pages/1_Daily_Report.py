@@ -285,12 +285,27 @@ uploaded = st.file_uploader(
 existing_master_df = None
 if uploaded is not None:
     try:
-        existing_master_df = pd.read_excel(uploaded, sheet_name='Master Results', skiprows=2)
+        # Try known sheet name first; fall back to first sheet if not found
+        xl = pd.ExcelFile(uploaded)
+        sheet = 'Master Results' if 'Master Results' in xl.sheet_names else xl.sheet_names[0]
+        # Detect how many header rows to skip by checking if row 0 or row 2 has 'Date'
+        probe = pd.read_excel(uploaded, sheet_name=sheet, header=None, nrows=5)
+        skip = 0
+        for i in range(5):
+            row_vals = [str(v).strip() for v in probe.iloc[i].tolist()]
+            if 'Date' in row_vals:
+                skip = i
+                break
+        else:
+            skip = 2  # default fallback
+        existing_master_df = pd.read_excel(uploaded, sheet_name=sheet, skiprows=skip)
+        # Normalize column count — keep only first 9 columns
+        existing_master_df = existing_master_df.iloc[:, :9]
         existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
         existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
         # Persist in session state so it survives the rerun when Generate is clicked
         st.session_state['master_df'] = existing_master_df
-        st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file")
+        st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file (sheet: '{sheet}')")
     except Exception as e:
         st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
         st.session_state['master_df'] = None
