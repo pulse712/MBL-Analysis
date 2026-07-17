@@ -550,7 +550,7 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
                         ln = int(odds_str) if odds_str not in ('', 'N/A', 'None') else None
                     if ln is not None:
                         if result == 'W':
-                            nc.value = round(ln * (100 / abs(ln)) if ln < 0 else ln, 2)
+                            nc.value = round(100 / abs(ln) * 100, 2) if ln < 0 else ln
                         else:
                             nc.value = -100.0
                     else:
