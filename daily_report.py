@@ -901,7 +901,12 @@ def check_scenarios(game_rows, opp_streaks, opp_road_wpct):
                 fired = False
 
             if fired:
-                play = f'FADE {team.title()}' if verdict == 'CLEAR FADE' else f'WATCH {team.title()}'
+                if verdict == 'CLEAR FADE':
+                    play = f'FADE {team.title()}'
+                elif verdict == 'CLEAR BET':
+                    play = f'BET {team.title()}'
+                else:
+                    play = f'WATCH {team.title()}'
                 triggers.append({
                     'team':     team,
                     'opponent': opp,
@@ -1179,84 +1184,6 @@ def build_report(games, triggers, report_date, odds):
         return games_written
 
     # ── WRITE TABS ────────────────────────────────────────────────
-        ws.set_tab_color(tab_color)
-        for ci, w in enumerate(COL_WIDTHS):
-            ws.set_column(ci, ci, w)
-
-        # ── Banner rows ──
-        ws.set_row(0, 30)
-        ws.set_row(1, 18)
-        ws.merge_range(0, 0, 0, NCOLS-1,
-            f'⚾  MLB DAILY BETTING REPORT  —  {tab_label}', f_banner)
-        ws.merge_range(1, 0, 1, NCOLS-1,
-            f'{report_date.strftime("%A, %B %d, %Y")}  |  Generated {datetime.now().strftime("%I:%M %p")}',
-            f_subtitle)
-
-        # ── Column headers ──
-        ws.set_row(2, 20)
-        for ci, h in enumerate(COL_HEADERS):
-            ws.write(2, ci, h, f_col_hdr)
-
-        ws.freeze_panes(3, 0)
-
-        row = 3
-        games_written = 0
-
-        for g_idx, g in enumerate(games, 1):
-            away = g['away_team']
-            home = g['home_team']
-            away_tc = title_case(away)
-            home_tc = title_case(home)
-            away_line = odds.get(away)
-            home_line = odds.get(home)
-
-            at = [t for t in triggers if t['team']==away and t['opponent']==home and t['verdict']==verdict_filter]
-            ht = [t for t in triggers if t['team']==home and t['opponent']==away and t['verdict']==verdict_filter]
-            if not at and not ht:
-                continue
-
-            games_written += 1
-
-            # ── Game header bar ──
-            ws.set_row(row, 18)
-            ws.merge_range(row, 0, row, NCOLS-1,
-                f'  Game {games_written}  ▸  {away_tc}  @  {home_tc}', f_game_hdr)
-            row += 1
-
-            # ── Away row ──
-            ws.set_row(row, 20)
-            a_scen = '  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in at) if at else '—'
-            a_play = at[0]['play'] if at else '—'
-            a_pf   = f_fade_away if (at and at[0]['verdict']=='CLEAR FADE') else (f_watch if at else f_no_play)
-            ws.write(row, 0, g_idx,         f_away_cell)
-            ws.write(row, 1, 'AWAY',        f_away_cell)
-            ws.write(row, 2, away_tc,       f_away_label)
-            ws.write(row, 3, fmt_line(away_line), f_away_cell)
-            ws.write(row, 4, a_play,        a_pf)
-            ws.write(row, 5, a_scen,        f_scen_away if at else f_no_scen_away)
-            row += 1
-
-            # ── Home row ──
-            ws.set_row(row, 20)
-            h_scen = '  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in ht) if ht else '—'
-            h_play = ht[0]['play'] if ht else '—'
-            h_pf   = f_fade_home if (ht and ht[0]['verdict']=='CLEAR FADE') else (f_watch if ht else f_no_play_h)
-            ws.write(row, 0, g_idx,         f_home_cell)
-            ws.write(row, 1, 'HOME',        f_home_cell)
-            ws.write(row, 2, home_tc,       f_home_label)
-            ws.write(row, 3, fmt_line(home_line), f_home_cell)
-            ws.write(row, 4, h_play,        h_pf)
-            ws.write(row, 5, h_scen,        f_scen_home if ht else f_no_scen_home)
-            row += 2  # spacer row between games
-
-        if games_written == 0:
-            ws.set_row(row, 30)
-            ws.merge_range(row, 0, row, NCOLS-1,
-                f'No {verdict_filter.title()} scenarios triggered today.', f_no_games)
-
-        return games_written
-
-    # ── WRITE TABS ────────────────────────────────────────────────
     ws_bet  = wb.add_worksheet('🟢 Clear Bet')
     n_bet   = write_tab(ws_bet,  'CLEAR BET',    'CLEAR BET',    '#00B050')
 
@@ -1517,9 +1444,9 @@ def build_report(games, triggers, report_date, odds):
         # Win%
         ws_perf.write_formula(perf_row, 6,
             f'=IF(F{er}>0,D{er}/F{er},"")', f_perf_pct)
-        # Net P/L = SUMIFS(pl_col, scen_col, scen_id_str, result_col, "<>")
+        # Net P/L = SUMIFS(pl_col, scen_col, scen_id_str)
         ws_perf.write_formula(perf_row, 7,
-            f'=SUMPRODUCT(({scen_col}="{scen_id_str}")*ISNUMBER(MATCH({result_col},{{"W","L"}},0))*({pl_col}))',
+            f'=IFERROR(SUMIFS({pl_col},{scen_col},"{scen_id_str}"),0)',
             f_perf_money)
 
         perf_row += 1
