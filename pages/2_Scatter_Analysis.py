@@ -295,7 +295,9 @@ if show_line:
     ))
 
 # ── TODAY'S GAMES ─────────────────────────────────────────────────
+today_points = []  # always initialized
 if show_today:
+    today_points = []
     winpcts  = get_team_winpcts(report_date_str)
     today_games = get_todays_games(report_date_str)
 
@@ -410,7 +412,7 @@ if not above.empty:
     st.dataframe(pd.DataFrame(yr_rows), hide_index=True, use_container_width=False)
 
 # ── TODAY'S HIGH-CONFIDENCE GAMES ─────────────────────────────────
-if show_today and 'today_points' in dir() and today_points:
+if show_today and today_points:
     st.markdown("---")
     st.subheader(f"⭐ Today's Games  ({report_date.strftime('%A, %B %d, %Y')})")
 

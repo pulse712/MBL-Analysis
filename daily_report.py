@@ -235,13 +235,20 @@ def fetch_recent_results(df, report_date):
             check_date += timedelta(days=1)
             continue
 
-        for g in data['dates'][0]['games']:
-            if g['status']['detailedState'] != 'Final':
-                continue
+        seen_pairs = set()  # dedup doubleheaders: keep last game per (away, home) pair
+        day_games = [g for g in data['dates'][0]['games'] if g['status']['detailedState'] == 'Final']
+        for g in day_games:
             away_api   = g['teams']['away']['team']['name']
             home_api   = g['teams']['home']['team']['name']
             away_team  = API_TO_CANONICAL.get(away_api, away_api.upper())
             home_team  = API_TO_CANONICAL.get(home_api, home_api.upper())
+            pair_key   = (away_team, home_team)
+            if pair_key in seen_pairs:
+                # Doubleheader — remove previously added records for this pair today
+                new_records = [rec for rec in new_records
+                               if not (rec['team'] in (away_team, home_team)
+                                       and rec['date'] == pd.Timestamp(check_date))]
+            seen_pairs.add(pair_key)
             away_score = g['teams']['away'].get('score', 0)
             home_score = g['teams']['home'].get('score', 0)
             away_win   = g['teams']['away'].get('isWinner', False)
@@ -897,7 +904,8 @@ def check_scenarios(game_rows, opp_streaks, opp_road_wpct):
                     fired = func(row, opp_road_wpct)
                 else:
                     fired = func(row)
-            except:
+            except Exception as e:
+                print(f'Warning: scenario {sid} error for {team}: {e}')
                 fired = False
 
             if fired:
