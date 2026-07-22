@@ -947,7 +947,11 @@ def title_case(name):
 def fmt_line(line):
     """Format moneyline for display."""
     if line is None or line == 'N/A': return 'N/A'
-    return f'+{line}' if isinstance(line, int) and line > 0 else str(line)
+    try:
+        line = int(line)
+    except (TypeError, ValueError):
+        return str(line)
+    return f'+{line}' if line > 0 else str(line)
 
 
 def pl_line_for_trigger(t):
