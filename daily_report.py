@@ -950,6 +950,26 @@ def fmt_line(line):
     return f'+{line}' if isinstance(line, int) and line > 0 else str(line)
 
 
+def pl_line_for_trigger(t):
+    """Moneyline used for P/L — opponent line for FADE, team line otherwise."""
+    if t.get('verdict') == 'CLEAR FADE':
+        ol = t.get('opp_line')
+        if ol is not None:
+            return ol
+    return t.get('line')
+
+
+def numeric_line(line):
+    """Coerce moneyline to int for formulas/P/L, or None."""
+    if line is None:
+        return None
+    try:
+        v = int(float(line))
+        return v
+    except (TypeError, ValueError):
+        return None
+
+
 def build_report(games, triggers, report_date, odds):
     fname = os.path.join(OUTPUT_DIR, f'MLB_Daily_Report_{report_date.strftime("%Y-%m-%d")}.xlsx')
     wb = xlsxwriter.Workbook(fname)
@@ -1320,9 +1340,8 @@ def build_report(games, triggers, report_date, odds):
     track_row = 3
     for t in triggers:
         line = t['line']
-        # Net P/L formula: =IF(H4="W", IF(D4>0, D4, 100/ABS(D4)*100), IF(H4="L", -100, ""))
-        # Row is 1-indexed in Excel formulas
-        excel_row = track_row + 1  # Excel rows are 1-indexed
+        pl_line = numeric_line(pl_line_for_trigger(t))
+        excel_row = track_row + 1
         ws_track.write(track_row, 0, report_date.strftime('%Y-%m-%d'), f_track_cell)
         ws_track.write(track_row, 1, title_case(t['team']),             f_track_left)
         ws_track.write(track_row, 2, t['home_away'].upper(),            f_track_cell)
@@ -1330,13 +1349,12 @@ def build_report(games, triggers, report_date, odds):
         ws_track.write(track_row, 4, t['play'],                         f_track_left)
         ws_track.write(track_row, 5, f"#{t['scenario_id']} {t['scenario']}", f_track_left)
         ws_track.write(track_row, 6, t['verdict'],                      f_track_cell)
-        ws_track.write(track_row, 7, '',                                f_input_cell)  # client fills
-        # Net P/L formula
-        if line is not None and isinstance(line, int):
-            if line > 0:
-                payout_formula = f'=IF(H{excel_row}="W",{line},IF(H{excel_row}="L",-100,""))'
+        ws_track.write(track_row, 7, '',                                f_input_cell)
+        if pl_line is not None:
+            if pl_line > 0:
+                payout_formula = f'=IF(H{excel_row}="W",{pl_line},IF(H{excel_row}="L",-100,""))'
             else:
-                payout_formula = f'=IF(H{excel_row}="W",ROUND(100/ABS({line})*100,2),IF(H{excel_row}="L",-100,""))'
+                payout_formula = f'=IF(H{excel_row}="W",ROUND(100/ABS({pl_line})*100,2),IF(H{excel_row}="L",-100,""))'
             ws_track.write_formula(track_row, 8, payout_formula, f_track_cell)
         else:
             ws_track.write(track_row, 8, '', f_track_cell)

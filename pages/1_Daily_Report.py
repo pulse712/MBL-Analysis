@@ -11,7 +11,8 @@ from daily_report import (
     load_historical_data, fetch_recent_results, compute_all_states,
     fetch_todays_schedule, get_team_state, build_game_row,
     check_scenarios, API_TO_CANONICAL, SCENARIO_DEFS,
-    NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line
+    NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line,
+    pl_line_for_trigger, numeric_line,
 )
 from master_results_manager import parse_results_upload
 
@@ -156,17 +157,13 @@ def build_report_bytes(games, triggers, report_date, odds):
     tr=3
     for t in triggers:
         line=t['line']
-        # For FADE plays use opponent line (betting the other side); fall back to faded team line
-        pl_line = t.get('opp_line') if t['verdict'] == 'CLEAR FADE' else line
-        if pl_line is None:
-            pl_line = line
+        pl_line = numeric_line(pl_line_for_trigger(t))
         er=tr+1
         w4.write(tr,0,report_date.strftime('%Y-%m-%d'),ftc); w4.write(tr,1,title_case(t['team']),ftl)
         w4.write(tr,2,t['home_away'].upper(),ftc); w4.write(tr,3,fmt_line(line),ftc)
         w4.write(tr,4,t['play'],ftl); w4.write(tr,5,f"#{t['scenario_id']} {t['scenario']}",ftl)
         w4.write(tr,6,t['verdict'],ftc); w4.write(tr,7,'',fti)
-        if pl_line is not None and isinstance(pl_line,(int,float)) and int(pl_line)==pl_line:
-            pl_line=int(pl_line)
+        if pl_line is not None:
             pf=f'=IF(H{er}="W",{pl_line},IF(H{er}="L",-100,""))' if pl_line>0 else f'=IF(H{er}="W",ROUND(100/ABS({pl_line})*100,2),IF(H{er}="L",-100,""))'
             w4.write_formula(tr,8,pf,ftc)
         else: w4.write(tr,8,'',ftc)
@@ -233,6 +230,171 @@ def build_report_bytes(games, triggers, report_date, odds):
 
     wb.close(); output.seek(0)
     return output.getvalue(), n0+n1+n2, n1, n2
+
+
+def _master_dedup_key(row, date_str=None):
+    """Unique key for a results row; includes opponent when available (doubleheaders)."""
+    if date_str is None:
+        try:
+            date_str = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
+        except Exception:
+            date_str = str(row.get('Date', '')).strip()[:10]
+    opp = str(row.get('_opponent', row.get('Opponent', ''))).strip()
+    return (date_str, str(row.get('Team', '')), str(row.get('Scenario', '')), opp)
+
+
+def build_master_file(existing_df, all_triggers, report_date):
+    """Build Master_Results.xlsx in memory from prior results + today's triggers."""
+    out = io.BytesIO()
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Master Results'
+
+    NAVY_FILL  = PatternFill('solid', fgColor='1B2A4A')
+    GREEN_FILL = PatternFill('solid', fgColor='375623')
+    INPUT_FILL = PatternFill('solid', fgColor='EAF4E8')
+    thin = lambda c: Side(style='thin', color=c)
+    std_border = Border(left=thin('C6EFCE'), right=thin('C6EFCE'),
+                        top=thin('C6EFCE'),  bottom=thin('C6EFCE'))
+    input_border = Border(left=thin('375623'), right=thin('375623'),
+                          top=thin('375623'),  bottom=thin('375623'))
+
+    for col, width in zip('ABCDEFGHI', [12, 26, 10, 10, 14, 40, 14, 14, 16]):
+        ws.column_dimensions[col].width = width
+
+    ws.merge_cells('A1:I1')
+    c = ws['A1']
+    c.value = 'MASTER RESULTS TRACKER  —  Season Cumulative'
+    c.font = Font(bold=True, size=14, color='FFFFFF', name='Calibri')
+    c.fill = NAVY_FILL
+    c.alignment = Alignment(horizontal='center', vertical='center')
+    ws.row_dimensions[1].height = 28
+
+    ws.merge_cells('A2:I2')
+    c = ws['A2']
+    c.value = 'Enter W or L in column H after each game. Net P/L calculates automatically.'
+    c.font = Font(italic=True, size=10, color='D0E4F5', name='Calibri')
+    c.fill = NAVY_FILL
+    c.alignment = Alignment(horizontal='center', vertical='center')
+    ws.row_dimensions[2].height = 16
+
+    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
+    for col, h in enumerate(headers, 1):
+        c = ws.cell(row=3, column=col)
+        c.value = h
+        c.font = Font(bold=True, color='FFFFFF', name='Calibri')
+        c.fill = GREEN_FILL
+        c.alignment = Alignment(horizontal='center', vertical='center')
+        c.border = Border(left=thin('000000'), right=thin('000000'),
+                          top=thin('000000'), bottom=thin('000000'))
+    ws.row_dimensions[3].height = 24
+    ws.freeze_panes = 'A4'
+
+    existing_rows = []
+    existing_keys = set()
+
+    if existing_df is not None and not existing_df.empty:
+        for _, row in existing_df.iterrows():
+            existing_rows.append(row)
+            k = _master_dedup_key(row)
+            existing_keys.add(k)
+            if not k[3]:
+                existing_keys.add((k[0], k[1], k[2], ''))
+
+    today_str = report_date.strftime('%Y-%m-%d')
+    for t in all_triggers:
+        scen_str = f"#{t['scenario_id']} {t['scenario']}"
+        team_str = title_case(t['team'])
+        opp = t.get('opponent', '')
+        key_full = (today_str, team_str, scen_str, opp)
+        key_short = (today_str, team_str, scen_str, '')
+        if key_full in existing_keys or key_short in existing_keys:
+            continue
+        pl_line = numeric_line(pl_line_for_trigger(t))
+        existing_rows.append({
+            'Date': today_str,
+            'Team': team_str,
+            'H/A':  t['home_away'].upper(),
+            'Odds': fmt_line(t['line']),
+            'Play': t['play'],
+            'Scenario': scen_str,
+            'Type':   t['verdict'],
+            'Result': '',
+            'Net P/L': None,
+            '_line': pl_line,
+            '_opponent': opp,
+        })
+        existing_keys.add(key_full)
+
+    for i, row in enumerate(existing_rows):
+        r = i + 4
+        line_val = row.get('_line', None)
+        result   = str(row.get('Result', '')).strip().upper()
+
+        ws.cell(r, 1).value = str(row.get('Date', ''))
+        ws.cell(r, 2).value = str(row.get('Team', ''))
+        ws.cell(r, 3).value = str(row.get('H/A', ''))
+        ws.cell(r, 4).value = str(row.get('Odds', ''))
+        ws.cell(r, 5).value = str(row.get('Play', ''))
+        ws.cell(r, 6).value = str(row.get('Scenario', ''))
+        ws.cell(r, 7).value = str(row.get('Type', ''))
+
+        rc = ws.cell(r, 8)
+        rc.value = result if result in ('W', 'L') else ''
+        rc.fill = INPUT_FILL
+        rc.font = Font(bold=True, name='Calibri')
+        rc.alignment = Alignment(horizontal='center', vertical='center')
+        rc.border = input_border
+
+        nc = ws.cell(r, 9)
+        if result in ('W', 'L'):
+            ln = numeric_line(line_val)
+            if ln is None:
+                ln = numeric_line(str(row.get('Odds', '')).replace('+', ''))
+            if ln is not None:
+                if result == 'W':
+                    nc.value = round(100 / abs(ln) * 100, 2) if ln < 0 else ln
+                else:
+                    nc.value = -100.0
+            else:
+                uploaded_pl = row.get('Net P/L')
+                nc.value = uploaded_pl if pd.notna(uploaded_pl) and uploaded_pl != '' else ''
+        else:
+            nc.value = ''
+        nc.alignment = Alignment(horizontal='center', vertical='center')
+        nc.border = std_border
+
+        for col in range(1, 8):
+            c = ws.cell(r, col)
+            c.alignment = Alignment(horizontal='center' if col != 2 else 'left',
+                                    vertical='center')
+            c.border = std_border
+
+    if existing_rows:
+        tr = len(existing_rows) + 4
+        ws.merge_cells(f'A{tr}:H{tr}')
+        tc = ws[f'A{tr}']
+        tc.value = 'TOTAL NET P/L'
+        tc.font = Font(bold=True, color='FFFFFF', name='Calibri')
+        tc.fill = GREEN_FILL
+        tc.alignment = Alignment(horizontal='center', vertical='center')
+        total_pl = sum(
+            (ws.cell(i + 4, 9).value or 0)
+            for i in range(len(existing_rows))
+            if isinstance(ws.cell(i + 4, 9).value, (int, float))
+        )
+        tc2 = ws.cell(tr, 9)
+        tc2.value = round(total_pl, 2)
+        tc2.font = Font(bold=True, color='FFFFFF', name='Calibri')
+        tc2.fill = GREEN_FILL
+        tc2.alignment = Alignment(horizontal='center', vertical='center')
+
+    wb.save(out)
+    out.seek(0)
+    return out.getvalue()
 
 
 # ── MAIN UI ───────────────────────────────────────────────────────
@@ -424,184 +586,10 @@ else:
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             use_container_width=True, type="primary")
 
-    # ── CUMULATIVE TRACKING — download updated master file ─────────
-    st.markdown("---")
-    st.subheader("📊 Download Updated Master Results")
-
-    def build_master_file(existing_df=None):
-        """Build a fresh Master_Results.xlsx in memory, pre-populated with today's triggers
-        plus any previously uploaded results, and return the bytes."""
-        out = io.BytesIO()
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'Master Results'
-
-        NAVY_FILL  = PatternFill('solid', fgColor='1B2A4A')
-        GREEN_FILL = PatternFill('solid', fgColor='375623')
-        INPUT_FILL = PatternFill('solid', fgColor='EAF4E8')
-        thin = lambda c: Side(style='thin', color=c)
-        std_border = Border(left=thin('C6EFCE'), right=thin('C6EFCE'),
-                            top=thin('C6EFCE'),  bottom=thin('C6EFCE'))
-        input_border = Border(left=thin('375623'), right=thin('375623'),
-                              top=thin('375623'),  bottom=thin('375623'))
-
-        ws.column_dimensions['A'].width = 12
-        ws.column_dimensions['B'].width = 26
-        ws.column_dimensions['C'].width = 10
-        ws.column_dimensions['D'].width = 10
-        ws.column_dimensions['E'].width = 14
-        ws.column_dimensions['F'].width = 40
-        ws.column_dimensions['G'].width = 14
-        ws.column_dimensions['H'].width = 14
-        ws.column_dimensions['I'].width = 16
-
-        # Title
-        ws.merge_cells('A1:I1')
-        c = ws['A1']
-        c.value = 'MASTER RESULTS TRACKER  —  Season Cumulative'
-        c.font = Font(bold=True, size=14, color='FFFFFF', name='Calibri')
-        c.fill = NAVY_FILL
-        c.alignment = Alignment(horizontal='center', vertical='center')
-        ws.row_dimensions[1].height = 28
-
-        # Subtitle
-        ws.merge_cells('A2:I2')
-        c = ws['A2']
-        c.value = 'Enter W or L in column H after each game. Net P/L calculates automatically.'
-        c.font = Font(italic=True, size=10, color='D0E4F5', name='Calibri')
-        c.fill = NAVY_FILL
-        c.alignment = Alignment(horizontal='center', vertical='center')
-        ws.row_dimensions[2].height = 16
-
-        # Headers
-        headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
-        for col, h in enumerate(headers, 1):
-            c = ws.cell(row=3, column=col)
-            c.value = h
-            c.font = Font(bold=True, color='FFFFFF', name='Calibri')
-            c.fill = GREEN_FILL
-            c.alignment = Alignment(horizontal='center', vertical='center')
-            c.border = Border(left=thin('000000'), right=thin('000000'),
-                              top=thin('000000'), bottom=thin('000000'))
-        ws.row_dimensions[3].height = 24
-        ws.freeze_panes = 'A4'
-
-        # Build rows: existing results (preserves W/L) + new triggers not already present
-        existing_rows = []
-        existing_keys = set()
-
-        if existing_df is not None and not existing_df.empty:
-            for _, row in existing_df.iterrows():
-                existing_rows.append(row)
-                # Normalize date to YYYY-MM-DD to avoid Timestamp vs string mismatch
-                try:
-                    d = pd.to_datetime(row.get('Date','')).strftime('%Y-%m-%d')
-                except Exception:
-                    d = str(row.get('Date','')).strip()[:10]
-                existing_keys.add((d, str(row.get('Team','')), str(row.get('Scenario',''))))
-
-        # Add today's triggers if not already in the file
-        today_str = report_date.strftime('%Y-%m-%d')
-        for t in all_triggers:
-            scen_str = f"#{t['scenario_id']} {t['scenario']}"
-            key = (today_str, title_case(t['team']), scen_str)
-            if key not in existing_keys:
-                existing_rows.append({
-                    'Date': today_str,
-                    'Team': title_case(t['team']),
-                    'H/A':  t['home_away'].upper(),
-                    'Odds': fmt_line(t['line']),
-                    'Play': t['play'],
-                    'Scenario': scen_str,
-                    'Type':   t['verdict'],
-                    'Result': '',
-                    'Net P/L': None,
-                    '_line': t['line'],
-                })
-
-        for i, row in enumerate(existing_rows):
-            r = i + 4  # excel row (1-indexed), data starts at row 4
-            line_val = row.get('_line', None)
-            result   = str(row.get('Result', '')).strip().upper()
-
-            ws.cell(r, 1).value = str(row.get('Date', ''))
-            ws.cell(r, 2).value = str(row.get('Team', ''))
-            ws.cell(r, 3).value = str(row.get('H/A', ''))
-            ws.cell(r, 4).value = str(row.get('Odds', ''))
-            ws.cell(r, 5).value = str(row.get('Play', ''))
-            ws.cell(r, 6).value = str(row.get('Scenario', ''))
-            ws.cell(r, 7).value = str(row.get('Type', ''))
-
-            # Result cell (highlighted for user input)
-            rc = ws.cell(r, 8)
-            rc.value = result if result in ('W', 'L') else ''
-            rc.fill = INPUT_FILL
-            rc.font = Font(bold=True, name='Calibri')
-            rc.alignment = Alignment(horizontal='center', vertical='center')
-            rc.border = input_border
-
-            # Net P/L — compute directly (no formulas, works without Excel)
-            nc = ws.cell(r, 9)
-            if result in ('W', 'L'):
-                try:
-                    ln = int(line_val) if line_val is not None else None
-                    if ln is None:
-                        # Try parsing stored odds string like "+130" or "-150"
-                        odds_str = str(row.get('Odds', '')).replace('+', '')
-                        ln = int(odds_str) if odds_str not in ('', 'N/A', 'None') else None
-                    if ln is not None:
-                        if result == 'W':
-                            nc.value = round(100 / abs(ln) * 100, 2) if ln < 0 else ln
-                        else:
-                            nc.value = -100.0
-                    else:
-                        nc.value = ''
-                except Exception:
-                    nc.value = ''
-            else:
-                nc.value = ''
-            nc.alignment = Alignment(horizontal='center', vertical='center')
-            nc.border = std_border
-
-            for col in range(1, 8):
-                c = ws.cell(r, col)
-                c.alignment = Alignment(horizontal='center' if col != 2 else 'left',
-                                        vertical='center')
-                c.border = std_border
-
-        # Totals row
-        last_data = len(existing_rows) + 3
-        if existing_rows:
-            tr = last_data + 1
-            ws.merge_cells(f'A{tr}:H{tr}')
-            tc = ws[f'A{tr}']
-            tc.value = 'TOTAL NET P/L'
-            tc.font = Font(bold=True, color='FFFFFF', name='Calibri')
-            tc.fill = GREEN_FILL
-            tc.alignment = Alignment(horizontal='center', vertical='center')
-            # Sum P/L
-            total_pl = sum(
-                (ws.cell(i + 4, 9).value or 0)
-                for i in range(len(existing_rows))
-                if isinstance(ws.cell(i + 4, 9).value, (int, float))
-            )
-            tc2 = ws.cell(tr, 9)
-            tc2.value = round(total_pl, 2)
-            tc2.font = Font(bold=True, color='FFFFFF', name='Calibri')
-            tc2.fill = GREEN_FILL
-            tc2.alignment = Alignment(horizontal='center', vertical='center')
-
-        wb.save(out)
-        out.seek(0)
-        return out.getvalue()
-
-        master_bytes = build_master_file(existing_master_df)
-        # Update session state with merged data so re-clicking Generate won't duplicate today's rows
+        st.markdown("---")
+        st.subheader("📊 Download Updated Master Results")
+        master_bytes = build_master_file(existing_master_df, all_triggers, report_date)
         try:
-            import io as _io
             merged_df, _, _ = parse_results_upload(master_bytes)
             st.session_state['master_df'] = merged_df
         except Exception:
@@ -613,8 +601,6 @@ else:
             mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             use_container_width=True,
         )
-
-
 
 
 # ── SCENARIO PERFORMANCE HEATMAP ─────────────────────────────────
