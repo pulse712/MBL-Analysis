@@ -18,6 +18,7 @@ mlb_analysis.py
 
 # Temp odds input
 daily_odds_input.xlsx
+odds_cache.json
 
 # Master Results (user-generated data, should not be in repo)
 Master_Results.xlsx

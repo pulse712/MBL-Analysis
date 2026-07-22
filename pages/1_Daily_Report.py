@@ -3,18 +3,18 @@ MLB Daily Betting Report - Streamlit Web App
 """
 import streamlit as st
 import pandas as pd
-import xlsxwriter
 import io
 import os
-from datetime import date, datetime
+from datetime import date
 from daily_report import (
     load_historical_data, fetch_recent_results, compute_all_states,
     fetch_todays_schedule, get_team_state, build_game_row,
     check_scenarios, API_TO_CANONICAL, SCENARIO_DEFS,
     NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line,
-    pl_line_for_trigger, numeric_line,
+    pl_line_for_trigger, numeric_line, save_odds_to_cache,
 )
 from master_results_manager import parse_results_upload
+from report_builder import build_report_bytes
 
 # Narrow the sidebar
 st.markdown("""
@@ -26,210 +26,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=3600, show_spinner="Loading historical data...")
+@st.cache_data(ttl=600, show_spinner="Loading historical data...")
 def load_enriched_data(report_date_str):
     df = load_historical_data()
-    df = fetch_recent_results(df, date.fromisoformat(report_date_str))
-    return compute_all_states(df)
+    df, warnings = fetch_recent_results(df, date.fromisoformat(report_date_str))
+    return compute_all_states(df), warnings
 
-@st.cache_data(ttl=1800, show_spinner="Fetching today's schedule...")
+@st.cache_data(ttl=600, show_spinner="Fetching today's schedule...")
 def get_schedule(report_date_str):
     return fetch_todays_schedule(date.fromisoformat(report_date_str))
-
-
-def build_report_bytes(games, triggers, report_date, odds):
-    output = io.BytesIO()
-    wb = xlsxwriter.Workbook(output, {'in_memory': True, 'calc_on_load': True})
-    NAVY='#1B2A4A'; STEEL='#2E5F8A'; LIGHT_STEEL='#D0E4F5'
-    FADE_RED='#C00000'; FADE_BG='#FFE7E7'; WATCH_AMB='#7D5A00'; WATCH_BG='#FFF3CC'
-    GREEN_FG='#375623'; GREEN_BG='#E2EFDA'; AWAY_BG='#F0F5FB'; HOME_BG='#FFFFFF'; GRAY_TEXT='#666666'
-    fb=wb.add_format({'bold':True,'font_size':16,'font_name':'Calibri','font_color':'white','bg_color':NAVY,'align':'center','valign':'vcenter'})
-    fs=wb.add_format({'font_size':11,'font_name':'Calibri','italic':True,'font_color':LIGHT_STEEL,'bg_color':NAVY,'align':'center','valign':'vcenter'})
-    fh=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':'white','bg_color':STEEL,'align':'center','valign':'vcenter','border':1,'border_color':'#1A4A72'})
-    fal=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':STEEL,'bg_color':AWAY_BG,'align':'left','valign':'vcenter','left':2,'left_color':STEEL,'border':1,'border_color':'#B8C9DC','indent':1})
-    fac=wb.add_format({'font_size':10,'font_name':'Calibri','bg_color':AWAY_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#B8C9DC'})
-    fhlb=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':'#333333','bg_color':HOME_BG,'align':'left','valign':'vcenter','left':2,'left_color':STEEL,'top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'right':1,'right_color':'#B8C9DC','indent':1})
-    fhcb=wb.add_format({'font_size':10,'font_name':'Calibri','bg_color':HOME_BG,'align':'center','valign':'vcenter','top':1,'top_color':'#B8C9DC','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#B8C9DC','right':1,'right_color':'#B8C9DC'})
-    ffa=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':FADE_RED,'bg_color':FADE_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#E8AAAA'})
-    ffhb=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':FADE_RED,'bg_color':FADE_BG,'align':'center','valign':'vcenter','top':1,'top_color':'#E8AAAA','bottom':2,'bottom_color':STEEL,'left':1,'left_color':'#E8AAAA','right':1,'right_color':'#E8AAAA'})
-    fba=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#A8D08D'})
-    fbhb=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'align':'center','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#A8D08D'})
-    fwa=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':WATCH_AMB,'bg_color':WATCH_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#D4B800'})
-    fwhb=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':WATCH_AMB,'bg_color':WATCH_BG,'align':'center','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#D4B800'})
-    fnpa=wb.add_format({'italic':True,'font_size':9,'font_name':'Calibri','font_color':GRAY_TEXT,'bg_color':AWAY_BG,'align':'center','valign':'vcenter','border':1,'border_color':'#B8C9DC'})
-    fnph=wb.add_format({'italic':True,'font_size':9,'font_name':'Calibri','font_color':GRAY_TEXT,'bg_color':HOME_BG,'align':'center','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#B8C9DC'})
-    fng=wb.add_format({'italic':True,'font_size':11,'font_color':GRAY_TEXT,'align':'center','valign':'vcenter'})
-    fgc=wb.add_format({'bold':True,'font_size':10,'font_name':'Calibri','font_color':NAVY,'bg_color':AWAY_BG,'align':'left','valign':'vcenter','border':1,'border_color':'#B8C9DC','indent':1})
-    fgch=wb.add_format({'font_size':9,'font_name':'Calibri','font_color':GRAY_TEXT,'bg_color':HOME_BG,'align':'left','valign':'vcenter','top':1,'bottom':2,'bottom_color':STEEL,'left':1,'right':1,'border_color':'#B8C9DC'})
-    fsl=wb.add_format({'bold':True,'font_size':11,'font_name':'Calibri','font_color':NAVY,'bg_color':'#EDF3FB','border':1,'border_color':'#B8C9DC','align':'left','valign':'vcenter','indent':1})
-    fsv=wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri','font_color':NAVY,'bg_color':'#EDF3FB','border':1,'border_color':'#B8C9DC','align':'center','valign':'vcenter'})
-    ffl=wb.add_format({'bold':True,'font_size':11,'font_name':'Calibri','font_color':FADE_RED,'bg_color':FADE_BG,'border':1,'border_color':'#E8AAAA','align':'left','valign':'vcenter','indent':1})
-    ffv=wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri','font_color':FADE_RED,'bg_color':FADE_BG,'border':1,'border_color':'#E8AAAA','align':'center','valign':'vcenter'})
-    fwl=wb.add_format({'bold':True,'font_size':11,'font_name':'Calibri','font_color':WATCH_AMB,'bg_color':WATCH_BG,'border':1,'border_color':'#D4B800','align':'left','valign':'vcenter','indent':1})
-    fwv=wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri','font_color':WATCH_AMB,'bg_color':WATCH_BG,'border':1,'border_color':'#D4B800','align':'center','valign':'vcenter'})
-    fbl=wb.add_format({'bold':True,'font_size':11,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'border':1,'border_color':'#A8D08D','align':'left','valign':'vcenter','indent':1})
-    fbv=wb.add_format({'bold':True,'font_size':14,'font_name':'Calibri','font_color':GREEN_FG,'bg_color':GREEN_BG,'border':1,'border_color':'#A8D08D','align':'center','valign':'vcenter'})
-
-    NCOLS=5; CW=[32,8,26,10,50]; CH=['GAME','H/A','Team','Odds','Play  /  Scenario']
-
-    def pfa(tl):
-        if not tl: return fnpa
-        v=tl[0]['verdict']
-        return ffa if v=='CLEAR FADE' else (fba if v=='CLEAR BET' else fwa)
-    def pfh(tl):
-        if not tl: return fnph
-        v=tl[0]['verdict']
-        return ffhb if v=='CLEAR FADE' else (fbhb if v=='CLEAR BET' else fwhb)
-
-    def write_tab(ws,label,vf,tc):
-        ws.set_tab_color(tc)
-        for ci,w in enumerate(CW): ws.set_column(ci,ci,w)
-        ws.set_row(0,30); ws.set_row(1,18)
-        ws.merge_range(0,0,0,NCOLS-1,f'MLB DAILY BETTING REPORT  -  {label}',fb)
-        ws.merge_range(1,0,1,NCOLS-1,f'{report_date.strftime("%A, %B %d, %Y")}  |  Generated {datetime.now().strftime("%I:%M %p")}',fs)
-        ws.set_row(2,20)
-        for ci,h in enumerate(CH): ws.write(2,ci,h,fh)
-        ws.freeze_panes(3,0)
-        row=3; written=0
-        for g in games:
-            away,home=g['away_team'],g['home_team']
-            atc,htc=title_case(away),title_case(home)
-            at=[t for t in triggers if t['team']==away and t['opponent']==home and t['verdict']==vf]
-            ht=[t for t in triggers if t['team']==home and t['opponent']==away and t['verdict']==vf]
-            if not at and not ht: continue
-            written+=1
-            ws.set_row(row,20)
-            ap=(at[0]['play']+'  |  '+'  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in at)) if at else ''
-            ws.write(row,0,f'{atc}  @  {htc}',fgc); ws.write(row,1,'AWAY',fac); ws.write(row,2,atc,fal)
-            ws.write(row,3,fmt_line(odds.get(away)),fac); ws.write(row,4,ap,pfa(at)); row+=1
-            ws.set_row(row,20)
-            hp=(ht[0]['play']+'  |  '+'  |  '.join(f"#{t['scenario_id']} {t['scenario']}" for t in ht)) if ht else ''
-            ws.write(row,0,'',fgch); ws.write(row,1,'HOME',fhcb); ws.write(row,2,htc,fhlb)
-            ws.write(row,3,fmt_line(odds.get(home)),fhcb); ws.write(row,4,hp,pfh(ht)); row+=1
-        if written==0: ws.merge_range(row,0,row,NCOLS-1,f'No {vf.title()} scenarios triggered today.',fng)
-        return written
-
-    w0=wb.add_worksheet('Green Clear Bet');   n0=write_tab(w0,'CLEAR BET','CLEAR BET','#00B050')
-    w1=wb.add_worksheet('Red Clear Fade');    n1=write_tab(w1,'CLEAR FADE','CLEAR FADE','#FF0000')
-    w2=wb.add_worksheet('Yellow Inconsistent');n2=write_tab(w2,'INCONSISTENT','INCONSISTENT','#FFD700')
-
-    w3=wb.add_worksheet('Summary'); w3.set_tab_color('#1B2A4A')
-    w3.set_column(0,0,35); w3.set_column(1,1,18); w3.set_column(2,2,35); w3.set_column(3,3,18)
-    w3.set_row(0,30); w3.set_row(1,18)
-    w3.merge_range(0,0,0,3,'MLB DAILY BETTING REPORT  -  SUMMARY',fb)
-    w3.merge_range(1,0,1,3,f'{report_date.strftime("%A, %B %d, %Y")}  |  Generated {datetime.now().strftime("%I:%M %p")}',fs)
-    nbt=sum(1 for t in triggers if t['verdict']=='CLEAR BET')
-    nft=sum(1 for t in triggers if t['verdict']=='CLEAR FADE')
-    nit=sum(1 for t in triggers if t['verdict']=='INCONSISTENT')
-    w3.set_row(3,28); w3.set_row(4,28); w3.set_row(5,28)
-    w3.write(3,0,'Total Games Today',fsl); w3.write(3,1,len(games),fsv)
-    w3.write(3,2,'Games With Triggers',fsl); w3.write(3,3,n0+n1+n2,fsv)
-    w3.write(4,0,'Clear Bet Triggers',fbl); w3.write(4,1,nbt,fbv)
-    w3.write(4,2,'Clear Fade Triggers',ffl); w3.write(4,3,nft,ffv)
-    w3.write(5,0,'Inconsistent Triggers',fwl); w3.write(5,1,nit,fwv)
-    w3.merge_range(6,0,6,3,'TOP PLAYS TODAY',fh); w3.set_row(7,20)
-    for ci,h in enumerate(['Team','Odds','Play','Scenario']): w3.write(7,ci,h,fh)
-    sr=8
-    for t in [x for x in triggers if x['verdict']=='CLEAR BET']:
-        w3.write(sr,0,title_case(t['team']),fbl); w3.write(sr,1,fmt_line(t['line']),fbv)
-        w3.write(sr,2,t['play'],fbl); w3.write(sr,3,f"#{t['scenario_id']} {t['scenario']}",fbl); sr+=1
-    for t in [x for x in triggers if x['verdict']=='CLEAR FADE']:
-        w3.write(sr,0,title_case(t['team']),ffl); w3.write(sr,1,fmt_line(t['line']),ffv)
-        w3.write(sr,2,t['play'],ffl); w3.write(sr,3,f"#{t['scenario_id']} {t['scenario']}",ffl); sr+=1
-    for t in [x for x in triggers if x['verdict']=='INCONSISTENT']:
-        w3.write(sr,0,title_case(t['team']),fwl); w3.write(sr,1,fmt_line(t['line']),fwv)
-        w3.write(sr,2,t['play'],fwl); w3.write(sr,3,f"#{t['scenario_id']} {t['scenario']}",fwl); sr+=1
-    w3.freeze_panes(8,0)
-
-    w4=wb.add_worksheet('Results Tracker'); w4.set_tab_color('#375623')
-    w4.set_column(0,0,12); w4.set_column(1,1,26); w4.set_column(2,2,10); w4.set_column(3,3,10)
-    w4.set_column(4,4,14); w4.set_column(5,5,40); w4.set_column(6,6,14); w4.set_column(7,7,14); w4.set_column(8,8,16)
-    fth=wb.add_format({'bold':True,'font_color':'white','bg_color':'#375623','align':'center','valign':'vcenter','border':1,'font_name':'Calibri'})
-    ftc=wb.add_format({'align':'center','valign':'vcenter','border':1,'border_color':'#C6EFCE','font_name':'Calibri'})
-    ftl=wb.add_format({'align':'left','valign':'vcenter','border':1,'border_color':'#C6EFCE','font_name':'Calibri','indent':1})
-    fti=wb.add_format({'bold':True,'align':'center','valign':'vcenter','border':2,'border_color':'#375623','bg_color':'#EAF4E8','font_name':'Calibri'})
-    ftt=wb.add_format({'bold':True,'bg_color':'#375623','font_color':'white','align':'center','border':1,'font_name':'Calibri'})
-    w4.set_row(0,30); w4.set_row(1,18)
-    w4.merge_range(0,0,0,8,'RESULTS TRACKER  -  Enter W or L after each game',fb)
-    w4.merge_range(1,0,1,8,'Enter W or L in the Result column. Net P/L calculates automatically.',fs)
-    w4.set_row(2,30)
-    for ci,h in enumerate(['Date','Team','H/A','Odds','Play','Scenario','Type','Result (W/L)','Net P/L ($100)']): w4.write(2,ci,h,fth)
-    tr=3
-    for t in triggers:
-        line=t['line']
-        pl_line = numeric_line(pl_line_for_trigger(t))
-        er=tr+1
-        w4.write(tr,0,report_date.strftime('%Y-%m-%d'),ftc); w4.write(tr,1,title_case(t['team']),ftl)
-        w4.write(tr,2,t['home_away'].upper(),ftc); w4.write(tr,3,fmt_line(line),ftc)
-        w4.write(tr,4,t['play'],ftl); w4.write(tr,5,f"#{t['scenario_id']} {t['scenario']}",ftl)
-        w4.write(tr,6,t['verdict'],ftc); w4.write(tr,7,'',fti)
-        if pl_line is not None:
-            pf=f'=IF(H{er}="W",{pl_line},IF(H{er}="L",-100,""))' if pl_line>0 else f'=IF(H{er}="W",ROUND(100/ABS({pl_line})*100,2),IF(H{er}="L",-100,""))'
-            w4.write_formula(tr,8,pf,ftc)
-        else: w4.write(tr,8,'',ftc)
-        tr+=1
-    if tr>3:
-        w4.merge_range(tr,0,tr,7,'TOTAL NET P/L',ftt)
-        w4.write_formula(tr,8,f'=SUMIF(H4:H{tr},"W",I4:I{tr})+SUMIF(H4:H{tr},"L",I4:I{tr})',ftt)
-    w4.freeze_panes(3,0); w4.autofilter(2,0,tr,8)
-
-    # Scenario Performance tab
-    w5=wb.add_worksheet('Scenario Performance'); w5.set_tab_color('#1F3864')
-    w5.set_column(0,0,6); w5.set_column(1,1,40); w5.set_column(2,2,14)
-    w5.set_column(3,3,8); w5.set_column(4,4,8); w5.set_column(5,5,10)
-    w5.set_column(6,6,10); w5.set_column(7,7,14)
-    fpb=wb.add_format({"bold":True,"font_size":14,"font_name":"Calibri","font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter"})
-    fps=wb.add_format({"font_size":10,"font_name":"Calibri","italic":True,"font_color":"#D0E4F5","bg_color":"#1F3864","align":"center","valign":"vcenter"})
-    fph=wb.add_format({"bold":True,"font_size":10,"font_name":"Calibri","font_color":"white","bg_color":"#2E5F8A","align":"center","valign":"vcenter","border":1})
-    fps2=wb.add_format({"bold":True,"font_size":10,"font_name":"Calibri","font_color":"#1F3864","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1})
-    fpn=wb.add_format({"font_size":10,"font_name":"Calibri","font_color":"#1F3864","bg_color":"#EDF3FB","align":"left","valign":"vcenter","border":1,"indent":1})
-    fpbet=wb.add_format({"font_size":9,"bold":True,"font_color":"#375623","bg_color":"#E2EFDA","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpfade=wb.add_format({"font_size":9,"bold":True,"font_color":"#C00000","bg_color":"#FFE7E7","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpinc=wb.add_format({"font_size":9,"bold":True,"font_color":"#7D5A00","bg_color":"#FFF3CC","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpnum=wb.add_format({"font_size":10,"bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fppct=wb.add_format({"font_size":10,"num_format":"0.0%","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpmny=wb.add_format({"font_size":10,"num_format":"$#,##0.00","bg_color":"#EDF3FB","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fptot=wb.add_format({"bold":True,"font_size":10,"font_color":"white","bg_color":"#1F3864","align":"center","valign":"vcenter","border":1,"font_name":"Calibri"})
-    fpnote=wb.add_format({"font_size":9,"font_name":"Calibri","italic":True,"font_color":"#7D5A00","bg_color":"#FFF9E6","align":"center","valign":"vcenter","border":1,"text_wrap":True})
-
-    w5.set_row(0,28); w5.set_row(1,16); w5.set_row(2,22)
-    w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
-    w5.merge_range(1,0,1,7,"Stats below are for TODAY only. Upload Master_Results.xlsx in the app for season-long tracking.",fps)
-    w5.merge_range(2,0,2,7,"To update season totals: open the app → upload your Master_Results.xlsx → download the updated file → enter W/L results.",fpnote)
-    w5.set_row(3,20)
-    for ci,h in enumerate(["#","Scenario Name","Classification","W","L","Total","Win%","Net P/L"]):
-        w5.write(3,ci,h,fph)
-    w5.freeze_panes(4,0)
-
-    # Reference internal Results Tracker for today's data
-    tsheet = "'Results Tracker'"
-    tend = max(tr + 50, 200)
-    sc = tsheet + '!F$4:F$' + str(tend)
-    rc = tsheet + '!H$4:H$' + str(tend)
-    pc = tsheet + '!I$4:I$' + str(tend)
-
-    pr=4
-    from daily_report import SCENARIO_DEFS
-    for sid,sname,verdict,_ in SCENARIO_DEFS:
-        sid_str=f"#{sid} {sname}"
-        vfmt=fpbet if verdict=="CLEAR BET" else (fpfade if verdict=="CLEAR FADE" else fpinc)
-        vlabel="CLEAR BET" if verdict=="CLEAR BET" else ("CLEAR FADE" if verdict=="CLEAR FADE" else "INCONSISTENT")
-        er=pr+1
-        w5.write(pr,0,sid,fps2); w5.write(pr,1,sname,fpn); w5.write(pr,2,vlabel,vfmt)
-        w5.write_formula(pr,3,'=IFERROR(COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"W"),0)',fpnum)
-        w5.write_formula(pr,4,'=IFERROR(COUNTIFS('+sc+',"'+sid_str+'",'+rc+',"L"),0)',fpnum)
-        w5.write_formula(pr,5,f'=D{er}+E{er}',fpnum)
-        w5.write_formula(pr,6,f'=IF(F{er}>0,D{er}/F{er},"")',fppct)
-        w5.write_formula(pr,7,'=IFERROR(SUMIFS('+pc+','+sc+',"'+sid_str+'"),0)',fpmny)
-        pr+=1
-    w5.set_row(pr,20)
-    for ci in range(8): w5.write(pr,ci,"" if ci not in [1] else "TODAY TOTALS",fptot)
-    w5.write_formula(pr,3,f"=SUM(D4:D{pr})",fptot); w5.write_formula(pr,4,f"=SUM(E4:E{pr})",fptot)
-    w5.write_formula(pr,5,f"=SUM(F4:F{pr})",fptot)
-    w5.write_formula(pr,7,f"=SUM(H4:H{pr})",fptot)
-
-    wb.close(); output.seek(0)
-    return output.getvalue(), n0+n1+n2, n1, n2
 
 
 def _norm_team_dedup(team):
@@ -312,7 +117,7 @@ def build_master_file(existing_df, all_triggers, report_date):
     c.alignment = Alignment(horizontal='center', vertical='center')
     ws.row_dimensions[2].height = 16
 
-    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)', 'PayoutLine']
+    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)', 'PayoutLine', 'Opponent']
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=3, column=col)
         c.value = h
@@ -323,20 +128,25 @@ def build_master_file(existing_df, all_triggers, report_date):
                           top=thin('000000'), bottom=thin('000000'))
     ws.row_dimensions[3].height = 24
     ws.freeze_panes = 'A4'
-    # Hide the PayoutLine helper column (col J) from casual view
+    # Hide helper columns from casual view
     ws.column_dimensions['J'].width = 0.1
     ws.column_dimensions['J'].hidden = True
+    ws.column_dimensions['K'].width = 0.1
+    ws.column_dimensions['K'].hidden = True
 
     existing_rows = []
     existing_keys = set()
+    today_str = report_date.strftime('%Y-%m-%d')
 
     if existing_df is not None and not existing_df.empty:
         for _, row in existing_df.iterrows():
-            existing_rows.append(row)
             try:
                 d = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
             except Exception:
                 d = str(row.get('Date', '')).strip()[:10]
+            if d == today_str and all_triggers:
+                continue
+            existing_rows.append(row)
             existing_keys.update(_dedup_key_variants(
                 d, row.get('Team', ''), row.get('Scenario', ''),
                 row.get('_opponent', row.get('Opponent', '')),
@@ -344,7 +154,6 @@ def build_master_file(existing_df, all_triggers, report_date):
                 include_legacy=not _norm_payout_dedup(row.get('_line', row.get('PayoutLine', ''))),
             ))
 
-    today_str = report_date.strftime('%Y-%m-%d')
     for t in all_triggers:
         scen_str = f"#{t['scenario_id']} {t['scenario']}"
         team_str = title_case(t['team'])
@@ -409,6 +218,7 @@ def build_master_file(existing_df, all_triggers, report_date):
 
         # Column J: hidden payout line — persists through upload/download cycle
         ws.cell(r, 10).value = ln
+        ws.cell(r, 11).value = str(row.get('_opponent', row.get('Opponent', '')) or '').strip().upper()
 
         for col in range(1, 8):
             c = ws.cell(r, col)
@@ -446,11 +256,14 @@ report_date_str = report_date.isoformat()
 
 with st.spinner("Loading team data and schedule..."):
     try:
-        enriched = load_enriched_data(report_date_str)
+        enriched, api_warnings = load_enriched_data(report_date_str)
         games    = get_schedule(report_date_str)
     except Exception as e:
         st.error(f"Error loading data: {e}")
         st.stop()
+
+for msg in api_warnings:
+    st.warning(f"⚠️ Recent results may be incomplete: {msg}")
 
 no_games = not games
 if no_games:
@@ -471,15 +284,30 @@ uploaded = st.file_uploader(
     type=['xlsx'], key='master_upload'
 )
 
+c_clear, c_refresh = st.columns(2)
+with c_clear:
+    if st.button("🗑️ Clear cumulative data", use_container_width=True):
+        st.session_state['master_df'] = None
+        st.rerun()
+with c_refresh:
+    if st.button("🔄 Refresh game data cache", use_container_width=True):
+        load_enriched_data.clear()
+        get_schedule.clear()
+        build_heatmap_data.clear()
+        st.rerun()
+
 existing_master_df = None
+upload_notes = []
 if uploaded is not None:
     try:
-        existing_master_df, source, sheet = parse_results_upload(uploaded.read())
+        existing_master_df, source, sheet, upload_notes = parse_results_upload(uploaded.read())
         st.session_state['master_df'] = existing_master_df
         st.success(
             f"✓ Loaded {len(existing_master_df)} results from {source} "
             f"(sheet: '{sheet}')"
         )
+        for note in upload_notes:
+            st.warning(note)
     except Exception as e:
         st.warning(f"Could not read uploaded file: {e}. Previous data preserved.")
         # Do NOT clear session — preserve any previously loaded good data
@@ -519,13 +347,14 @@ else:
     odds_df = pd.DataFrame(odds_data)
     edited = st.data_editor(
         odds_df,
+        key=f"odds_{report_date_str}",
         column_config={
             'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width=220),
             'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width=220),
             'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width=120),
             'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width=120),
         },
-        hide_index=True, use_container_width=True,
+        hide_index=True, width='stretch',
         height=(len(odds_df) + 1) * 35 + 3,
     )
 
@@ -533,17 +362,33 @@ else:
 
     if st.button("⚾ Generate Daily Report", type="primary", use_container_width=True):
         odds = {}
+        odds_skipped = []
         for _, row in edited.iterrows():
-            if row['Away Line'] is not None and str(row['Away Line']) not in ['','nan']:
-                try: odds[str(row['Away Team']).upper()] = int(float(row['Away Line']))
-                except: pass
-            if row['Home Line'] is not None and str(row['Home Line']) not in ['','nan']:
-                try: odds[str(row['Home Team']).upper()] = int(float(row['Home Line']))
-                except: pass
+            away_team = str(row['Away Team']).upper()
+            home_team = str(row['Home Team']).upper()
+            if row['Away Line'] is not None and str(row['Away Line']) not in ['', 'nan']:
+                try:
+                    odds[away_team] = int(float(row['Away Line']))
+                except (TypeError, ValueError):
+                    odds_skipped.append(f"{away_team}: {row['Away Line']!r}")
+            if row['Home Line'] is not None and str(row['Home Line']) not in ['', 'nan']:
+                try:
+                    odds[home_team] = int(float(row['Home Line']))
+                except (TypeError, ValueError):
+                    odds_skipped.append(f"{home_team}: {row['Home Line']!r}")
+
+        if odds_skipped:
+            st.warning(
+                "Could not parse moneyline(s): "
+                + ", ".join(odds_skipped)
+                + ". Fix or clear those cells and try again."
+            )
 
         if not odds:
             st.warning("Please enter at least some moneylines before generating the report.")
             st.stop()
+
+        save_odds_to_cache(report_date, odds)
 
         with st.spinner("Running scenario analysis..."):
             opp_streaks = {}; opp_road_wpct = {}
@@ -559,15 +404,47 @@ else:
                         opp_road_wpct[team] = rw/(rw+rl) if (rw+rl)>0 else None
 
             all_triggers = []
+            missing_history = []
             for g in games:
                 away, home = g['away_team'], g['home_team']
                 away_state = get_team_state(enriched, away, report_date)
                 home_state = get_team_state(enriched, home, report_date)
+                if away_state is None:
+                    missing_history.append(title_case(away))
+                if home_state is None:
+                    missing_history.append(title_case(home))
                 away_row = build_game_row(away_state, 'away', home, odds.get(away))
                 home_row = build_game_row(home_state, 'home', away, odds.get(home))
                 all_triggers.extend(check_scenarios([away_row, home_row], opp_streaks, opp_road_wpct, odds))
 
-            excel_bytes, n_total, n_fade, n_inc = build_report_bytes(games, all_triggers, report_date, odds)
+            if missing_history:
+                st.warning(
+                    "No historical data for: "
+                    + ", ".join(sorted(set(missing_history)))
+                    + " — scenario checks skipped for those teams."
+                )
+
+            master_bytes = build_master_file(existing_master_df, all_triggers, report_date)
+            merged_df = None
+            try:
+                merged_df, _, _, _ = parse_results_upload(master_bytes)
+                st.session_state['master_df'] = merged_df
+            except Exception as e:
+                st.warning(
+                    f"Master file was built but session state could not be refreshed "
+                    f"({e}). Re-upload the downloaded Master_Results.xlsx before generating again."
+                )
+
+            excel_bytes, n_total, n_fade, n_inc = build_report_bytes(
+                games, all_triggers, report_date, odds, cumulative_df=merged_df,
+            )
+
+        fade_no_opp = [t for t in all_triggers if t['verdict'] == 'CLEAR FADE' and t.get('opp_line') is None]
+        if fade_no_opp:
+            st.warning(
+                f"{len(fade_no_opp)} CLEAR FADE trigger(s) are missing opponent odds — "
+                "Net P/L is left blank until the opponent moneyline is entered."
+            )
 
         st.markdown("---")
         st.subheader("📊 Results")
@@ -607,7 +484,7 @@ else:
             if game_rows:
                 n_rows = len(game_rows)
                 st.dataframe(pd.DataFrame(game_rows),
-                    use_container_width=True, hide_index=True,
+                    width='stretch', hide_index=True,
                     height=(n_rows + 1) * 35 + 3,
                     column_config={
                         'GAME': st.column_config.TextColumn('GAME', width=300),
@@ -626,12 +503,6 @@ else:
 
         st.markdown("---")
         st.subheader("📊 Download Updated Master Results")
-        master_bytes = build_master_file(existing_master_df, all_triggers, report_date)
-        try:
-            merged_df, _, _ = parse_results_upload(master_bytes)
-            st.session_state['master_df'] = merged_df
-        except Exception:
-            pass
         st.download_button(
             label="📥 Download Master_Results.xlsx  (open → enter W/L → re-upload next time)",
             data=master_bytes,
@@ -644,9 +515,9 @@ else:
 # ── SCENARIO PERFORMANCE HEATMAP ─────────────────────────────────
 st.markdown("---")
 st.subheader("🔥 Scenario Performance Heatmap  (2023–2026 Historical Backtest)")
-st.caption("Win % color-coded: 🟢 green = strong, 🟡 yellow = mixed, 🔴 red = weak. Click column headers to sort.")
+st.caption("Win % color-coded: 🟢 green = strong, 🟡 yellow = mixed, 🔴 red = weak. INCONSISTENT scenarios show N/A (no defined bet direction). Click column headers to sort.")
 
-@st.cache_data(ttl=86400, show_spinner="Building heatmap from historical data...")
+@st.cache_data(ttl=3600, show_spinner="Building heatmap from historical data...")
 def build_heatmap_data():
     """
     Run all 36 scenarios against the full historical dataset using fast
@@ -655,34 +526,36 @@ def build_heatmap_data():
     """
     from daily_report import (
         load_historical_data, compute_all_states, SCENARIO_DEFS,
-        NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, DIVISIONS
+        NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP,
+        build_streak_lookup, build_opp_road_wpct_lookup, backtest_wl_counts,
     )
 
     df = load_historical_data()
     df = compute_all_states(df)
     df = df[df['result'].isin(['W', 'L'])].copy()
 
-    # Pre-compute opponent streak per team (last known)
-    opp_streaks = {}
-    opp_road_wpct = {}
-    for team, tdf in df.groupby('team'):
-        tdf = tdf.sort_values('date')
-        last = tdf.iloc[-1]
-        sb, res = last['streak_before'], last['result']
-        opp_streaks[team] = (sb + 1 if sb >= 0 else 1) if res == 'W' else (sb - 1 if sb <= 0 else -1)
-        road = tdf[tdf['home_away'] == 'away']
-        if not road.empty:
-            rw = (road['result'] == 'W').sum()
-            rl = (road['result'] == 'L').sum()
-            opp_road_wpct[team] = rw / (rw + rl) if (rw + rl) > 0 else None
+    streak_lookup = build_streak_lookup(df)
+    opp_road_lookup = build_opp_road_wpct_lookup(df)
 
     rows = []
     for sid, sname, verdict, func in SCENARIO_DEFS:
         try:
             if sid in NEEDS_OPP_STREAK:
-                mask = df.apply(lambda r: bool(func(r.to_dict(), opp_streaks)), axis=1)
+                mask = df.apply(
+                    lambda r: bool(func(
+                        r.to_dict(),
+                        {r['opponent']: streak_lookup.get((r['date'], r['opponent']), 0)},
+                    )),
+                    axis=1,
+                )
             elif sid in NEEDS_OPP_ROAD_WP:
-                mask = df.apply(lambda r: bool(func(r.to_dict(), opp_road_wpct)), axis=1)
+                mask = df.apply(
+                    lambda r: bool(func(
+                        r.to_dict(),
+                        {r['opponent']: opp_road_lookup.get((r['date'], r['opponent']))},
+                    )),
+                    axis=1,
+                )
             else:
                 mask = df.apply(lambda r: bool(func(r.to_dict())), axis=1)
         except Exception:
@@ -690,17 +563,21 @@ def build_heatmap_data():
 
         subset = df[mask]
         total  = len(subset)
-        wins   = (subset['result'] == 'W').sum()
-        losses = (subset['result'] == 'L').sum()
-        win_pct = round(wins / total * 100, 1) if total > 0 else None
+        wins, losses = backtest_wl_counts(subset, verdict)
+        if wins is None:
+            win_pct = None
+            w_disp = l_disp = None
+        else:
+            win_pct = round(wins / total * 100, 1) if total > 0 else None
+            w_disp, l_disp = wins, losses
 
         rows.append({
             '#':        sid,
             'Scenario': sname,
             'Type':     verdict,
             'Games':    total,
-            'W':        int(wins),
-            'L':        int(losses),
+            'W':        w_disp,
+            'L':        l_disp,
             'Win%':     win_pct,
         })
 

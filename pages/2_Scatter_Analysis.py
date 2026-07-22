@@ -45,28 +45,12 @@ def load_series_data(file_bytes):
     return df
 
 
-# ── FETCH TODAY'S GAMES WIN% FROM MLB API ─────────────────────────
-@st.cache_data(ttl=1800, show_spinner="Fetching today's standings...")
+# ── FETCH TODAY'S GAMES WIN% (as-of selected date) ───────────────
+@st.cache_data(ttl=1800, show_spinner="Computing standings as of selected date...")
 def get_team_winpcts(report_date_str):
-    """Fetch current season win% for all teams from MLB Stats API."""
-    report_date = date.fromisoformat(report_date_str)
-    season = report_date.year
-    url = f'https://statsapi.mlb.com/api/v1/standings?leagueId=103,104&season={season}&standingsTypes=regularSeason'
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-    except Exception:
-        return {}
-
-    winpcts = {}
-    for record in data.get('records', []):
-        for tr in record.get('teamRecords', []):
-            name = tr['team']['name']
-            wins = tr.get('wins', 0)
-            losses = tr.get('losses', 0)
-            total = wins + losses
-            winpcts[name] = round(wins / total, 4) if total > 0 else 0.500
-    return winpcts
+    """Win% for each team using games completed before the selected date."""
+    from daily_report import get_team_winpcts_as_of
+    return get_team_winpcts_as_of(date.fromisoformat(report_date_str))
 
 
 @st.cache_data(ttl=1800, show_spinner="Fetching today's schedule...")
@@ -133,6 +117,7 @@ def above_line(dog_wp, fav_wp, x1, y1, x2, y2):
 # ── PAGE HEADER ───────────────────────────────────────────────────
 st.title("📊 Series Dog Scatter Analysis")
 st.markdown("Dog Win% vs Favorite Win% — Historical series results with today's games overlaid.")
+st.caption("Today's overlay uses season win% **as of the selected date** (before that day's games).")
 st.markdown("---")
 
 # ── LOAD DATA ─────────────────────────────────────────────────────
@@ -368,7 +353,7 @@ fig.update_layout(
     paper_bgcolor='white'
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 
 # ── RECORD ABOVE / BELOW LINE ─────────────────────────────────────
 st.markdown("---")
@@ -409,7 +394,7 @@ if not above.empty:
         t = w + l
         yr_rows.append({'Year': int(yr), 'W': int(w), 'L': int(l),
                         'Total': int(t), 'Win%': f"{w/t*100:.1f}%" if t > 0 else "—"})
-    st.dataframe(pd.DataFrame(yr_rows), hide_index=True, use_container_width=False)
+    st.dataframe(pd.DataFrame(yr_rows), hide_index=True, width='content')
 
 # ── TODAY'S HIGH-CONFIDENCE GAMES ─────────────────────────────────
 if show_today and today_points:
@@ -438,7 +423,7 @@ if show_today and today_points:
     st.dataframe(
         today_df.style.apply(highlight_zone, axis=1),
         hide_index=True,
-        use_container_width=False
+        width='content'
     )
 
     above_today = [p for p in today_points if p['above_line']]

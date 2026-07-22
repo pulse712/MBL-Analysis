@@ -12,6 +12,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import os
 from datetime import datetime
 
+from daily_report import pl_line_for_trigger, numeric_line
+
 
 MASTER_FILE = 'Master_Results.xlsx'
 RESULTS_COLUMNS = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result', 'Net P/L']
@@ -39,16 +41,23 @@ def _find_results_sheet(sheet_names):
     return None, None
 
 
-def _normalize_results_df(df):
-    """Normalize uploaded results to the standard 9-column layout."""
-    # Read up to 10 columns — col 10 is the hidden PayoutLine (payout line for P/L)
-    has_payout_col = len(df.columns) >= 10
-    if has_payout_col:
+def _normalize_results_df(df, raw_ncols=None):
+    """Normalize uploaded results to the standard layout (incl. hidden PayoutLine + Opponent)."""
+    if raw_ncols is None:
+        raw_ncols = len(df.columns)
+    ncols = len(df.columns)
+    if ncols >= 11:
+        df = df.iloc[:, :11].copy()
+        df.columns = RESULTS_COLUMNS + ['PayoutLine', 'Opponent']
+    elif ncols >= 10:
         df = df.iloc[:, :10].copy()
         df.columns = RESULTS_COLUMNS + ['PayoutLine']
+        df['Opponent'] = ''
     else:
         df = df.iloc[:, :9].copy()
         df.columns = RESULTS_COLUMNS
+        df['PayoutLine'] = None
+        df['Opponent'] = ''
     df = df[df['Date'].notna()]
     # Normalize Date to YYYY-MM-DD string regardless of how pandas read it
     def _fmt_date(v):
@@ -59,9 +68,12 @@ def _normalize_results_df(df):
     df['Date'] = df['Date'].apply(_fmt_date)
     date_str = df['Date'].astype(str).str.strip().str.upper()
     team_str = df['Team'].astype(str).str.strip().str.upper()
-    df = df[~date_str.str.contains('TOTAL', na=False)]
-    df = df[~team_str.str.contains('TOTAL', na=False)]
-    df = df[date_str.str.match(r'\d{4}-\d{2}-\d{2}', na=False)]
+    mask = (
+        ~date_str.str.contains('TOTAL', na=False)
+        & ~team_str.str.contains('TOTAL', na=False)
+        & date_str.str.match(r'\d{4}-\d{2}-\d{2}', na=False)
+    )
+    df = df.loc[mask].copy()
     df['Result'] = df['Result'].astype(str).str.strip().str.upper()
     df.loc[~df['Result'].isin(['W', 'L']), 'Result'] = ''
     if 'PayoutLine' in df.columns:
@@ -73,6 +85,9 @@ def _normalize_results_df(df):
             except (TypeError, ValueError):
                 return None
         df['PayoutLine'] = df['PayoutLine'].apply(_to_int_line)
+    if 'Opponent' in df.columns:
+        df['Opponent'] = df['Opponent'].astype(str).str.strip().str.upper()
+        df.loc[df['Opponent'].isin(['', 'NAN', 'NONE']), 'Opponent'] = ''
     return df.reset_index(drop=True)
 
 
@@ -85,7 +100,7 @@ def parse_results_upload(file_bytes):
     - MLB_Daily_Report_*.xlsx (Results Tracker sheet, with W/L entered)
 
     Returns:
-        (DataFrame, source_label, sheet_name)
+        (DataFrame, source_label, sheet_name, upload_notes)
     """
     xl = pd.ExcelFile(io.BytesIO(file_bytes))
     sheet, source = _find_results_sheet(xl.sheet_names)
@@ -105,8 +120,22 @@ def parse_results_upload(file_bytes):
 
     probe = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None, nrows=6)
     skip = _detect_header_row(probe)
+    raw_probe = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, skiprows=skip, nrows=1)
+    raw_ncols = len(raw_probe.columns)
     df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, skiprows=skip)
-    df = _normalize_results_df(df)
+    df = _normalize_results_df(df, raw_ncols=raw_ncols)
+
+    upload_notes = []
+    if raw_ncols < 10:
+        upload_notes.append(
+            'Legacy file missing hidden PayoutLine column (J). '
+            'Re-download Master_Results.xlsx from the app for accurate FADE P/L.'
+        )
+    if raw_ncols < 11:
+        upload_notes.append(
+            'Legacy file missing hidden Opponent column (K). '
+            'Re-download from the app for doubleheader-safe deduplication.'
+        )
 
     if df.empty:
         raise ValueError(
@@ -114,7 +143,7 @@ def parse_results_upload(file_bytes):
             "Open the daily report, enter W/L on the Results Tracker tab, save, then upload."
         )
 
-    return df, source, sheet
+    return df, source, sheet, upload_notes
 
 
 def initialize_master_results():
@@ -153,6 +182,10 @@ def initialize_master_results():
     ws.column_dimensions['G'].width = 14   # Type
     ws.column_dimensions['H'].width = 14   # Result
     ws.column_dimensions['I'].width = 16   # Net P/L
+    ws.column_dimensions['J'].width = 0.1  # PayoutLine (hidden helper)
+    ws.column_dimensions['J'].hidden = True
+    ws.column_dimensions['K'].width = 0.1  # Opponent (hidden helper)
+    ws.column_dimensions['K'].hidden = True
 
     # Title row
     ws.merge_cells('A1:I1')
@@ -173,7 +206,7 @@ def initialize_master_results():
     ws.row_dimensions[2].height = 18
 
     # Header row
-    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
+    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)', 'PayoutLine', 'Opponent']
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=3, column=col_idx)
         cell.value = header
@@ -213,6 +246,23 @@ def append_to_master_results(triggers, report_date):
     # Load existing data
     wb = load_workbook(MASTER_FILE)
     ws = wb.active
+    ws.column_dimensions['J'].width = 0.1
+    ws.column_dimensions['J'].hidden = True
+    ws.column_dimensions['K'].width = 0.1
+    ws.column_dimensions['K'].hidden = True
+    if ws.cell(row=3, column=10).value != 'PayoutLine':
+        ws.cell(row=3, column=10).value = 'PayoutLine'
+    if ws.cell(row=3, column=11).value != 'Opponent':
+        ws.cell(row=3, column=11).value = 'Opponent'
+
+    # Remove prior rows for this date (re-generate replaces stale triggers)
+    date_str = report_date.strftime('%Y-%m-%d')
+    r = 4
+    while ws.cell(row=r, column=1).value is not None:
+        if str(ws.cell(row=r, column=1).value)[:10] == date_str:
+            ws.delete_rows(r, 1)
+        else:
+            r += 1
 
     # Find the next empty row
     next_row = 4  # Start after header (row 3)
@@ -296,21 +346,30 @@ def append_to_master_results(triggers, report_date):
         cell.font = input_font
         cell.border = input_border
 
-        # Net P/L - formula
+        # Net P/L - formula (uses payout line so FADE bets pay on opponent odds)
         cell = ws.cell(row=row, column=9)
-        line = trigger['line']
-        if line is not None and isinstance(line, int):
-            if line > 0:
-                # Dog: if win get +line, if lose get -100
-                formula = f'=IF(H{row}="W",{line},IF(H{row}="L",-100,""))'
+        payout_line = numeric_line(pl_line_for_trigger(trigger))
+        if payout_line is not None:
+            if payout_line > 0:
+                formula = f'=IF(H{row}="W",{payout_line},IF(H{row}="L",-100,""))'
             else:
-                # Favorite: if win get 100/|line|*100, if lose get -100
-                formula = f'=IF(H{row}="W",ROUND(100/ABS({line})*100,2),IF(H{row}="L",-100,""))'
+                formula = f'=IF(H{row}="W",ROUND(100/ABS({payout_line})*100,2),IF(H{row}="L",-100,""))'
             cell.value = formula
         else:
             cell.value = ''
         cell.alignment = cell_alignment
         cell.border = thin_border
+
+        if payout_line is not None:
+            pc = ws.cell(row=row, column=10)
+            pc.value = payout_line
+            pc.alignment = cell_alignment
+            pc.border = thin_border
+
+        opp_cell = ws.cell(row=row, column=11)
+        opp_cell.value = str(trigger.get('opponent', '') or '').strip().upper()
+        opp_cell.alignment = cell_alignment
+        opp_cell.border = thin_border
 
         next_row += 1
 
@@ -328,11 +387,37 @@ def load_master_results():
 
     try:
         with open(MASTER_FILE, 'rb') as f:
-            df, _, _ = parse_results_upload(f.read())
+            df, _, _, _ = parse_results_upload(f.read())
         return None if df.empty else df
     except Exception as e:
         print(f'Warning: Could not load master results: {e}')
         return None
+
+
+def _payout_line_from_row(row):
+    """Resolve the moneyline used for P/L from a results row."""
+    if 'PayoutLine' in row.index and pd.notna(row.get('PayoutLine')):
+        pl = numeric_line(row.get('PayoutLine'))
+        if pl is not None:
+            return pl
+    verdict = str(row.get('Type', '')).strip().upper()
+    if verdict == 'CLEAR FADE':
+        return None
+    odds_val = str(row.get('Odds', '')).strip().replace(' ', '')
+    if odds_val.upper() in ('', 'N/A', 'NAN'):
+        return None
+    return numeric_line(odds_val.replace('+', ''))
+
+
+def _net_pl_from_result(result, payout_line):
+    """Calculate net P/L in dollars (based on $100 bet) from result + payout line."""
+    if result not in ('W', 'L') or payout_line is None:
+        return 0.0
+    if result == 'L':
+        return -100.0
+    if payout_line > 0:
+        return float(payout_line)
+    return round(100 / abs(payout_line) * 100, 2)
 
 
 def get_cumulative_stats():
@@ -356,8 +441,12 @@ def get_cumulative_stats():
         total = wins + losses
         win_pct = wins / total if total > 0 else 0
         
-        # Sum net P/L (only for W and L results)
-        net_pl = scenario_df[scenario_df['Result'].isin(['W', 'L'])]['Net P/L'].sum()
+        # Sum net P/L from Result + payout line (Excel formulas are not readable via pandas)
+        pl_values = scenario_df.apply(
+            lambda r: _net_pl_from_result(r['Result'], _payout_line_from_row(r)),
+            axis=1,
+        )
+        net_pl = pl_values.sum()
         
         stats[scenario] = {
             'wins': wins,

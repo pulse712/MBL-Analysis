@@ -11,6 +11,7 @@ Workflow:
 Run manually each morning, or schedule via Windows Task Scheduler / cron.
 """
 
+import io
 import requests
 import pandas as pd
 from openpyxl import load_workbook
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, date
 import re
 import os
 import sys
+import json
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -26,6 +28,7 @@ import sys
 
 DATA_FILE      = 'MLB Data 2023-2026.xlsx'   # historical data (kept updated)
 ODDS_INPUT     = 'daily_odds_input.xlsx'      # client fills this each morning
+ODDS_CACHE     = 'odds_cache.json'            # persisted moneylines by date/team
 OUTPUT_DIR     = '.'                          # where to save daily reports
 REPORT_DATE    = date.today()                 # override: date(2026, 7, 7)
 
@@ -108,22 +111,48 @@ OPP_NORM = {
     'new york-nl': 'NEW YORK METS',
 }
 
-def normalize_opponent(raw_opp):
+OPP_ABBREV = {
+    'sd': 'SAN DIEGO PADRES', 'sf': 'SAN FRANCISCO GIANTS',
+    'lad': 'LOS ANGELES DODGERS', 'laa': 'LOS ANGELES ANGELS', 'ana': 'LOS ANGELES ANGELS',
+    'nyy': 'NEW YORK YANKEES', 'nym': 'NEW YORK METS',
+    'chc': 'CHICAGO CUBS', 'cws': 'CHICAGO WHITE SOX', 'chw': 'CHICAGO WHITE SOX',
+    'bos': 'BOSTON RED SOX', 'tb': 'TAMPA BAY RAYS', 'tba': 'TAMPA BAY RAYS',
+    'tor': 'TORONTO BLUE JAYS', 'bal': 'BALTIMORE ORIOLES', 'cle': 'CLEVELAND GUARDIANS',
+    'det': 'DETROIT TIGERS', 'kc': 'KANSAS CITY ROYALS', 'kcr': 'KANSAS CITY ROYALS',
+    'min': 'MINNESOTA TWINS', 'hou': 'HOUSTON ASTROS', 'sea': 'SEATTLE MARINERS',
+    'tex': 'TEXAS RANGERS', 'oak': 'ATHLETICS', 'ath': 'ATHLETICS',
+    'atl': 'ATLANTA BRAVES', 'mia': 'MIAMI MARLINS', 'phi': 'PHILADELPHIA PHILLIES',
+    'was': 'WASHINGTON NATIONALS', 'wsh': 'WASHINGTON NATIONALS',
+    'cin': 'CINCINNATI REDS', 'mil': 'MILWAUKEE BREWERS', 'pit': 'PITTSBURGH PIRATES',
+    'stl': 'ST. LOUIS CARDINALS', 'ari': 'ARIZONA DIAMONDBACKS', 'az': 'ARIZONA DIAMONDBACKS',
+    'col': 'COLORADO ROCKIES',
+}
+
+def normalize_opponent(raw_opp, warnings=None):
     s = str(raw_opp).replace('\xa0', ' ').strip()
-    s = re.sub(r'^(vs|@)\s*', '', s, flags=re.IGNORECASE).strip().lower()
-    if s in OPP_NORM:
-        return OPP_NORM[s]
-    for key, val in OPP_NORM.items():
-        if key in s or s in key:
-            return val
+    s = re.sub(r'^(vs|@)\s*', '', s, flags=re.IGNORECASE).strip()
+    sl = s.lower()
+    if sl == 'los angeles' and warnings is not None:
+        warnings.append(
+            f'Ambiguous opponent "{s}" — use "Los Angeles Dodgers" or "Los Angeles Angels".'
+        )
+    if sl in OPP_NORM:
+        return OPP_NORM[sl]
+    if sl in OPP_ABBREV:
+        return OPP_ABBREV[sl]
+    for key in sorted(OPP_NORM.keys(), key=len, reverse=True):
+        if sl == key or sl.startswith(key + ' ') or sl.endswith(' ' + key):
+            return OPP_NORM[key]
     return s.upper()
 
-def parse_score(score_str, result):
+def parse_score(score_str, result, warnings=None):
     try:
         parts = str(score_str).split('-')
         a, b = int(parts[0]), int(parts[1])
         return (a, b) if result == 'W' else (b, a)
-    except:
+    except (TypeError, ValueError, IndexError):
+        if warnings is not None:
+            warnings.append(f'Could not parse score "{score_str}" — run-window scenarios may not fire.')
         return None, None
 
 # ─────────────────────────────────────────────
@@ -156,6 +185,8 @@ def load_historical_data():
                 ou       = row[col+6]
                 total    = row[col+7]
                 if date_val is None or result is None:
+                    continue
+                if str(result).strip().upper() not in ('W', 'L'):
                     continue
                 opp_str = str(opp_val).replace('\xa0',' ')
                 home_away = 'away' if opp_str.startswith('@') else 'home'
@@ -209,6 +240,81 @@ def fetch_todays_schedule(report_date):
     return games
 
 # ─────────────────────────────────────────────
+# ODDS CACHE (persist moneylines for API-fetched games)
+# ─────────────────────────────────────────────
+
+def load_odds_cache():
+    if not os.path.exists(ODDS_CACHE):
+        return {}
+    try:
+        with open(ODDS_CACHE, encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _coerce_line(line):
+    if line is None:
+        return None
+    try:
+        return int(float(line))
+    except (TypeError, ValueError):
+        return None
+
+
+def save_odds_to_cache(report_date, odds_dict):
+    """Store entered moneylines so API-fetched results can backfill lines later."""
+    if not odds_dict:
+        return
+    cache = load_odds_cache()
+    key = report_date.strftime('%Y-%m-%d') if hasattr(report_date, 'strftime') else str(report_date)[:10]
+    day = cache.setdefault(key, {})
+    for team, line in odds_dict.items():
+        ln = _coerce_line(line)
+        if ln is not None:
+            day[str(team).upper()] = ln
+    with open(ODDS_CACHE, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, indent=2)
+
+
+def _line_from_odds_cache(cache, dt, team):
+    d = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)[:10]
+    raw = cache.get(d, {}).get(str(team).upper())
+    return _coerce_line(raw)
+
+
+def apply_odds_cache(df):
+    """Backfill missing lines on historical/API rows from the odds cache."""
+    cache = load_odds_cache()
+    if not cache:
+        return df
+    for idx, row in df.iterrows():
+        if _coerce_line(row.get('line')) is not None:
+            continue
+        ln = _line_from_odds_cache(cache, row['date'], row['team'])
+        if ln is not None:
+            df.at[idx, 'line'] = ln
+    return df
+
+
+def get_team_winpcts_as_of(report_date):
+    """
+    Season win% for each MLB API team name as of report_date
+    (games completed strictly before that date).
+    """
+    df = load_historical_data()
+    df, _ = fetch_recent_results(df, report_date)
+    before = df[df['date'].dt.date < report_date]
+    by_canonical = {}
+    for team in set(API_TO_CANONICAL.values()):
+        tdf = before[before['team'] == team]
+        w = (tdf['result'] == 'W').sum()
+        l = (tdf['result'] == 'L').sum()
+        total = w + l
+        by_canonical[team] = round(w / total, 4) if total > 0 else 0.500
+    return {api: by_canonical.get(canon, 0.500) for api, canon in API_TO_CANONICAL.items()}
+
+# ─────────────────────────────────────────────
 # STEP 3: FETCH RECENT RESULTS & UPDATE DATA
 # ─────────────────────────────────────────────
 
@@ -216,18 +322,24 @@ def fetch_recent_results(df, report_date):
     """
     Fetch game results from MLB Stats API for dates after the last date in df.
     Appends new completed games to df.
+
+    Returns:
+        (updated_df, warnings) — warnings lists dates that could not be fetched.
     """
     last_date = df['date'].max().date()
     check_date = last_date + timedelta(days=1)
     new_records = []
+    warnings = []
 
     while check_date < report_date:
         date_str = check_date.strftime('%Y-%m-%d')
         url = f'https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}&hydrate=linescore'
         try:
             r = requests.get(url, timeout=10)
+            r.raise_for_status()
             data = r.json()
-        except:
+        except Exception as e:
+            warnings.append(f'Could not fetch results for {date_str}: {e}')
             check_date += timedelta(days=1)
             continue
 
@@ -235,62 +347,59 @@ def fetch_recent_results(df, report_date):
             check_date += timedelta(days=1)
             continue
 
-        seen_pairs = set()  # dedup doubleheaders: keep last game per (away, home) pair
         day_games = [g for g in data['dates'][0]['games'] if g['status']['detailedState'] == 'Final']
         for g in day_games:
             away_api   = g['teams']['away']['team']['name']
             home_api   = g['teams']['home']['team']['name']
             away_team  = API_TO_CANONICAL.get(away_api, away_api.upper())
             home_team  = API_TO_CANONICAL.get(home_api, home_api.upper())
-            pair_key   = (away_team, home_team)
-            if pair_key in seen_pairs:
-                # Doubleheader — remove previously added records for this pair today
-                new_records = [rec for rec in new_records
-                               if not (rec['team'] in (away_team, home_team)
-                                       and rec['date'] == pd.Timestamp(check_date))]
-            seen_pairs.add(pair_key)
             away_score = g['teams']['away'].get('score', 0)
             home_score = g['teams']['home'].get('score', 0)
-            away_win   = g['teams']['away'].get('isWinner', False)
-
-            year = check_date.year
-            dt   = pd.Timestamp(check_date)
-
-            # Away team record
+            if away_score == home_score:
+                continue
+            away_win = g['teams']['away'].get('isWinner', False)
+            home_win = g['teams']['home'].get('isWinner', False)
             if away_win:
                 rs_a, ra_a, res_a = away_score, home_score, 'W'
                 rs_h, ra_h, res_h = home_score, away_score, 'L'
-            else:
+            elif home_win:
                 rs_a, ra_a, res_a = away_score, home_score, 'L'
                 rs_h, ra_h, res_h = home_score, away_score, 'W'
+            else:
+                continue
 
-            score_str = f'{max(away_score,home_score)}-{min(away_score,home_score)}'
+            score_str = f'{max(away_score, home_score)}-{min(away_score, home_score)}'
+            odds_cache = load_odds_cache()
+
+            year = check_date.year
+            dt   = pd.Timestamp(check_date)
 
             for team, opp, ha, rs, ra, res in [
                 (away_team, home_team, 'away', rs_a, ra_a, res_a),
                 (home_team, away_team, 'home', rs_h, ra_h, res_h),
             ]:
+                cached_line = _line_from_odds_cache(odds_cache, dt, team)
                 new_records.append({
                     'year': year, 'team': team,
                     'date': dt, 'opponent': opp,
                     'home_away': ha, 'result': res,
                     'score': score_str,
                     'runs_scored': rs, 'runs_allowed': ra,
-                    'line': None, 'ou': None, 'total': None,
+                    'line': cached_line, 'ou': None, 'total': None,
                     'division': DIVISIONS.get(team, 'UNKNOWN'),
                 })
 
         check_date += timedelta(days=1)
 
     if new_records:
-        new_df = pd.DataFrame(new_records)
-        df = pd.concat([df, new_df], ignore_index=True)
+        df = _append_game_records(df, new_records)
         df = df.sort_values(['team','date']).reset_index(drop=True)
         print(f'Added {len(new_records)} new game records from API')
     else:
         print('Data already up to date')
 
-    return df
+    df = apply_odds_cache(df)
+    return df, warnings
 
 # ─────────────────────────────────────────────
 # STEP 4: COMPUTE TEAM STATES
@@ -299,10 +408,15 @@ def fetch_recent_results(df, report_date):
 def compute_all_states(df):
     TEAM_LIST = sorted(df['team'].unique())
     parts = []
+    all_cols = list(df.columns)
     for team in TEAM_LIST:
         tdf = df[df['team'] == team].copy().sort_values('date').reset_index(drop=True)
         parts.append(compute_team_states(tdf))
-    enriched = pd.concat(parts).reset_index(drop=True)
+    if not parts:
+        return df.iloc[0:0].copy()
+    enriched = parts[0]
+    for part in parts[1:]:
+        enriched = pd.concat([enriched, part.reindex(columns=enriched.columns)], ignore_index=True)
     return enriched
 
 def compute_team_states(rows):
@@ -394,7 +508,7 @@ def compute_team_states(rows):
         if r == 'W':
             cur_wins += 1
             cur_streak = cur_streak+1 if cur_streak >= 0 else 1
-        else:
+        elif r == 'L':
             cur_streak = cur_streak-1 if cur_streak <= 0 else -1
 
     sbp = [None] + streak[:-1]
@@ -434,19 +548,143 @@ def compute_team_states(rows):
         l10.append(window.count('W'))
     rows['last10_wins'] = l10
 
-    series_totals = rows.groupby('series_id')['series_id'].transform('count')
-    rows['series_total'] = series_totals.values
-
+    rows['series_total'] = _series_length_totals(rows)
     rows['rt_segment'] = (rows['home_away'] != rows['home_away'].shift()).cumsum()
-    rt_totals = rows[rows['home_away']=='away'].groupby('rt_segment')['rt_segment'].transform('count')
+    away_trip_totals = _segment_length_totals(rows, 'away')
+    home_trip_totals = _segment_length_totals(rows, 'home')
     rows['roadtrip_total'] = 0
-    rows.loc[rows['home_away']=='away','roadtrip_total'] = rt_totals.values
-
-    hs_totals = rows[rows['home_away']=='home'].groupby('rt_segment')['rt_segment'].transform('count')
     rows['homestand_total'] = 0
-    rows.loc[rows['home_away']=='home','homestand_total'] = hs_totals.values
+    for i in range(len(rows)):
+        if rows.iloc[i]['home_away'] == 'away':
+            rows.iat[i, rows.columns.get_loc('roadtrip_total')] = away_trip_totals[i]
+        else:
+            rows.iat[i, rows.columns.get_loc('homestand_total')] = home_trip_totals[i]
 
     return rows
+
+
+def _series_length_totals(rows):
+    """
+    Full series length once a series ends (next game is vs a different opponent).
+    Open series at end of log use seg_len+2 so last_game_series does not fire early.
+    """
+    n = len(rows)
+    totals = [0] * n
+    i = 0
+    while i < n:
+        opp = rows.iloc[i]['opponent']
+        start = i
+        while i < n and rows.iloc[i]['opponent'] == opp:
+            i += 1
+        end = i - 1
+        seg_len = end - start + 1
+        total_val = seg_len if i < n else seg_len + 2
+        for j in range(start, end + 1):
+            totals[j] = total_val
+    return totals
+
+
+def _segment_length_totals(rows, location):
+    """Same as _series_length_totals but for consecutive home or away segments."""
+    n = len(rows)
+    totals = [0] * n
+    i = 0
+    while i < n:
+        if rows.iloc[i]['home_away'] != location:
+            i += 1
+            continue
+        start = i
+        while i < n and rows.iloc[i]['home_away'] == location:
+            i += 1
+        end = i - 1
+        seg_len = end - start + 1
+        total_val = seg_len if i < n else seg_len + 2
+        for j in range(start, end + 1):
+            totals[j] = total_val
+    return totals
+
+
+def _append_game_records(df, new_records):
+    """Append API game rows without pandas concat dtype warnings."""
+    if not new_records:
+        return df
+    new_df = pd.DataFrame(new_records)
+    combined_cols = list(dict.fromkeys(list(df.columns) + list(new_df.columns)))
+    df = df.reindex(columns=combined_cols)
+    new_df = new_df.reindex(columns=combined_cols)
+    return pd.concat([df, new_df], ignore_index=True)
+
+
+def _run_windows_from_history(tdf):
+    """Last 2/3/4 game run windows including the most recent completed game."""
+    rs = tdf['runs_scored'].tolist()
+    ra = tdf['runs_allowed'].tolist()
+
+    def take(hist, k):
+        return hist[-k:] if len(hist) >= k else None
+
+    return {
+        'prev2_runs_scored': take(rs, 2),
+        'prev3_runs_scored': take(rs, 3),
+        'prev4_runs_scored': take(rs, 4),
+        'prev2_runs_allowed': take(ra, 2),
+        'prev3_runs_allowed': take(ra, 3),
+        'prev4_runs_allowed': take(ra, 4),
+    }
+
+
+def _last10_wins_from_history(tdf):
+    """Wins in the last 10 completed games (same season year as most recent game)."""
+    last_year = tdf.iloc[-1]['year']
+    recent = tdf[tdf['year'] == last_year].tail(10)
+    return int((recent['result'] == 'W').sum())
+
+
+def build_streak_lookup(df):
+    """Point-in-time streak_before keyed by (date, team)."""
+    return df.set_index(['date', 'team'])['streak_before'].to_dict()
+
+
+def build_opp_road_wpct_lookup(df):
+    """Opponent road win% before each game, keyed by (date, team)."""
+    lookup = {}
+    for team, tdf in df.groupby('team'):
+        tdf = tdf.sort_values('date')
+        road = tdf[tdf['home_away'] == 'away']
+        for _, row in tdf.iterrows():
+            d = row['date']
+            rb = road[road['date'] < d]
+            if rb.empty:
+                lookup[(d, team)] = None
+            else:
+                rw = (rb['result'] == 'W').sum()
+                rl = (rb['result'] == 'L').sum()
+                lookup[(d, team)] = rw / (rw + rl) if (rw + rl) > 0 else None
+    return lookup
+
+
+def backtest_wl_counts(subset, verdict):
+    """Historical backtest W/L: fade wins when the faded team loses."""
+    if verdict == 'INCONSISTENT':
+        return None, None
+    if verdict == 'CLEAR FADE':
+        wins = int((subset['result'] == 'L').sum())
+        losses = int((subset['result'] == 'W').sum())
+    else:
+        wins = int((subset['result'] == 'W').sum())
+        losses = int((subset['result'] == 'L').sum())
+    return wins, losses
+
+
+def load_master_history_before(report_date):
+    """Rows from Master_Results.xlsx with Date strictly before report_date."""
+    from master_results_manager import MASTER_FILE, parse_results_upload
+    if not os.path.exists(MASTER_FILE):
+        return []
+    with open(MASTER_FILE, 'rb') as f:
+        df, _, _, _ = parse_results_upload(f.read())
+    day = report_date.strftime('%Y-%m-%d') if hasattr(report_date, 'strftime') else str(report_date)[:10]
+    return [row for _, row in df.iterrows() if str(row.get('Date', ''))[:10] < day]
 
 
 # ─────────────────────────────────────────────
@@ -472,6 +710,8 @@ def get_team_state(enriched, team, report_date):
     else:
         cur_streak = sb - 1 if sb <= 0 else -1
 
+    run_windows = _run_windows_from_history(tdf)
+
     return {
         'team':               team,
         'streak_before':      cur_streak,
@@ -491,13 +731,13 @@ def get_team_state(enriched, team, report_date):
         'homestand_total':    last['homestand_total'],
         'wins_before':        last['wins_before'] + (1 if last['result']=='W' else 0),
         'games_before':       last['games_before'] + 1,
-        'last10_wins':        last['last10_wins'],
-        'prev2_runs_scored':  last['prev2_runs_scored'],
-        'prev3_runs_scored':  last['prev3_runs_scored'],
-        'prev4_runs_scored':  last['prev4_runs_scored'],
-        'prev2_runs_allowed': last['prev2_runs_allowed'],
-        'prev3_runs_allowed': last['prev3_runs_allowed'],
-        'prev4_runs_allowed': last['prev4_runs_allowed'],
+        'last10_wins':        _last10_wins_from_history(tdf),
+        'prev2_runs_scored':  run_windows['prev2_runs_scored'],
+        'prev3_runs_scored':  run_windows['prev3_runs_scored'],
+        'prev4_runs_scored':  run_windows['prev4_runs_scored'],
+        'prev2_runs_allowed': run_windows['prev2_runs_allowed'],
+        'prev3_runs_allowed': run_windows['prev3_runs_allowed'],
+        'prev4_runs_allowed': run_windows['prev4_runs_allowed'],
         'winpct_before':      (last['wins_before']+(1 if last['result']=='W' else 0)) / (last['games_before']+1),
         'division':           DIVISIONS.get(team,'UNKNOWN'),
     }
@@ -508,14 +748,13 @@ def build_game_row(state, home_away, opponent, line):
         return None
 
     # Determine series position for today's game
-    # If same opponent as last game, we're continuing the series
     last_opp = state['prev_opponent']
     if last_opp == opponent:
         series_game = state['series_game_num'] + 1
-        series_total = state['series_total']  # approximate
+        series_total = max(state['series_total'], series_game)
     else:
         series_game = 1
-        series_total = 3  # assume 3-game series default
+        series_total = 3
 
     # Homestand/road trip position
     if home_away == 'home':
@@ -528,10 +767,14 @@ def build_game_row(state, home_away, opponent, line):
             hs_series = 1
         rt_total = 0
     else:
-        rg = state['roadtrip_game_num'] + 1 if state['roadtrip_game_num'] > 0 else 1
+        if state['roadtrip_game_num'] > 0 and state['roadtrip_game_num'] < state['roadtrip_total']:
+            rg = state['roadtrip_game_num'] + 1
+            rt_total = max(state['roadtrip_total'], rg)
+        else:
+            rg = 1
+            rt_total = 1
         hg = 0
         hs_series = 0
-        rt_total = state['roadtrip_total']
 
     return {
         'team':               state['team'],
@@ -870,12 +1113,12 @@ def load_odds(games):
         home_team = str(row[1]).strip().upper() if row[1] else ''
         away_line = row[2]
         home_line = row[3]
-        if away_line is not None:
-            try: odds[away_team] = int(away_line)
-            except: pass
-        if home_line is not None:
-            try: odds[home_team] = int(home_line)
-            except: pass
+        ln = numeric_line(away_line)
+        if ln is not None:
+            odds[away_team] = ln
+        ln = numeric_line(home_line)
+        if ln is not None:
+            odds[home_team] = ln
     return odds
 
 
@@ -957,10 +1200,8 @@ def fmt_line(line):
 def pl_line_for_trigger(t):
     """Moneyline used for P/L — opponent line for FADE, team line otherwise."""
     if t.get('verdict') == 'CLEAR FADE':
-        ol = t.get('opp_line')
-        if ol is not None:
-            return ol
-    return t.get('line')
+        return numeric_line(t.get('opp_line'))
+    return numeric_line(t.get('line'))
 
 
 def numeric_line(line):
@@ -975,6 +1216,7 @@ def numeric_line(line):
 
 
 def build_report(games, triggers, report_date, odds):
+    """Write CLI daily report to disk. Streamlit downloads use report_builder.build_report_bytes()."""
     fname = os.path.join(OUTPUT_DIR, f'MLB_Daily_Report_{report_date.strftime("%Y-%m-%d")}.xlsx')
     wb = xlsxwriter.Workbook(fname)
 
@@ -1317,6 +1559,8 @@ def build_report(games, triggers, report_date, odds):
     ws_track.set_column(6, 6, 12)   # Classification
     ws_track.set_column(7, 7, 12)   # Result (W/L — client fills)
     ws_track.set_column(8, 8, 14)   # Net P/L (auto)
+    ws_track.set_column(9, 9, None, None, {'hidden': True})  # PayoutLine
+    ws_track.set_column(10, 10, None, None, {'hidden': True})  # Opponent
 
     f_track_hdr = wb.add_format({'bold':True,'font_color':'white','bg_color':'#375623',
                                    'align':'center','valign':'vcenter','border':1,'font_name':'Calibri'})
@@ -1336,7 +1580,7 @@ def build_report(games, triggers, report_date, odds):
         'Enter W or L in the Result column. Net P/L calculates automatically.',
         f_subtitle)
 
-    track_headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result\n(W or L)', 'Net P/L\n($100 flat)']
+    track_headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result\n(W or L)', 'Net P/L\n($100 flat)', 'PayoutLine', 'Opponent']
     ws_track.set_row(2, 30)
     for ci, h in enumerate(track_headers):
         ws_track.write(2, ci, h, f_track_hdr)
@@ -1362,6 +1606,9 @@ def build_report(games, triggers, report_date, odds):
             ws_track.write_formula(track_row, 8, payout_formula, f_track_cell)
         else:
             ws_track.write(track_row, 8, '', f_track_cell)
+        if pl_line is not None:
+            ws_track.write(track_row, 9, pl_line, f_track_cell)
+        ws_track.write(track_row, 10, str(t.get('opponent', '') or '').strip().upper(), f_track_cell)
         track_row += 1
 
     # Totals row
@@ -1375,6 +1622,50 @@ def build_report(games, triggers, report_date, odds):
 
     ws_track.freeze_panes(3, 0)
     ws_track.autofilter(2, 0, track_row, 8)
+
+    # ── CUMULATIVE RESULTS (prior days from Master_Results.xlsx) ───
+    cum_data_end = 3
+    hist_rows = load_master_history_before(report_date)
+    has_cumulative = len(hist_rows) > 0
+    if has_cumulative:
+        w_cum = wb.add_worksheet('Cumulative Results')
+        w_cum.hide()
+        w_cum.set_column(0, 0, 12)
+        w_cum.set_column(1, 1, 26)
+        w_cum.set_column(5, 5, 40)
+        w_cum.set_column(7, 7, 14)
+        w_cum.set_column(8, 8, 16)
+        w_cum.set_column(9, 9, None, None, {'hidden': True})
+        w_cum.set_column(10, 10, None, None, {'hidden': True})
+        cum_headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type',
+                       'Result (W/L)', 'Net P/L ($100)', 'PayoutLine', 'Opponent']
+        for ci, h in enumerate(cum_headers):
+            w_cum.write(2, ci, h, f_track_hdr)
+        cum_row = 3
+        for row in hist_rows:
+            er = cum_row + 1
+            w_cum.write(cum_row, 0, str(row.get('Date', '')), f_track_cell)
+            w_cum.write(cum_row, 1, str(row.get('Team', '')), f_track_left)
+            w_cum.write(cum_row, 2, str(row.get('H/A', '')), f_track_cell)
+            w_cum.write(cum_row, 3, str(row.get('Odds', '')), f_track_cell)
+            w_cum.write(cum_row, 4, str(row.get('Play', '')), f_track_left)
+            w_cum.write(cum_row, 5, str(row.get('Scenario', '')), f_track_left)
+            w_cum.write(cum_row, 6, str(row.get('Type', '')), f_track_cell)
+            res = str(row.get('Result', '') or '').strip().upper()
+            w_cum.write(cum_row, 7, res if res in ('W', 'L') else '', f_input_cell if res in ('W', 'L') else f_track_cell)
+            payout = numeric_line(row.get('PayoutLine'))
+            if payout is None:
+                payout = numeric_line(str(row.get('Odds', '')).replace('+', ''))
+            if payout is not None:
+                pf = (f'=IF(H{er}="W",{payout},IF(H{er}="L",-100,""))' if payout > 0
+                      else f'=IF(H{er}="W",ROUND(100/ABS({payout})*100,2),IF(H{er}="L",-100,""))')
+                w_cum.write_formula(cum_row, 8, pf, f_track_cell)
+                w_cum.write(cum_row, 9, payout, f_track_cell)
+            else:
+                w_cum.write(cum_row, 8, '', f_track_cell)
+            w_cum.write(cum_row, 10, str(row.get('Opponent', row.get('_opponent', '')) or '').strip().upper(), f_track_cell)
+            cum_row += 1
+        cum_data_end = cum_row
 
     # ── SCENARIO PERFORMANCE TAB ──────────────────────────────────
     # Lists all 36 scenarios with cumulative W/L/P/L fed from Results Tracker
@@ -1430,75 +1721,84 @@ def build_report(games, triggers, report_date, odds):
                                     'align':'center','valign':'vcenter','border':1})
 
     # Banner
-    ws_perf.set_row(0, 28); ws_perf.set_row(1, 16)
-    ws_perf.merge_range(0, 0, 0, 7, '📋  SCENARIO PERFORMANCE TRACKER  —  Season Cumulative', f_perf_banner)
-    ws_perf.merge_range(1, 0, 1, 7,
-        'Updates automatically as you enter results in the Results Tracker tab.', f_perf_sub)
+    ws_perf.set_row(0, 28); ws_perf.set_row(1, 16); ws_perf.set_row(2, 22)
+    tr_end = max(track_row + 500, 1000)
+    tr_sc = f"'📈 Results Tracker'!F$4:F${tr_end}"
+    tr_rc = f"'📈 Results Tracker'!H$4:H${tr_end}"
+    tr_pc = f"'📈 Results Tracker'!I$4:I${tr_end}"
+    if has_cumulative:
+        ws_perf.merge_range(0, 0, 0, 7, '📋  SCENARIO PERFORMANCE TRACKER  —  Season Cumulative', f_perf_banner)
+        ws_perf.merge_range(1, 0, 1, 7,
+            'Prior days from Master_Results.xlsx + today from Results Tracker (enter W/L there).',
+            f_perf_sub)
+        ws_perf.merge_range(2, 0, 2, 7,
+            'Keep Master_Results.xlsx updated in this folder for season-long CLI tracking.',
+            f_perf_sub)
+        cum_end = max(cum_data_end + 500, 1000)
+        cum_sc = f"'Cumulative Results'!F$4:F${cum_end}"
+        cum_rc = f"'Cumulative Results'!H$4:H${cum_end}"
+        cum_pc = f"'Cumulative Results'!I$4:I${cum_end}"
+    else:
+        ws_perf.merge_range(0, 0, 0, 7, '📋  SCENARIO PERFORMANCE TRACKER  —  Today\'s Results Only', f_perf_banner)
+        ws_perf.merge_range(1, 0, 1, 7,
+            'Updates automatically as you enter results in the Results Tracker tab.', f_perf_sub)
+        ws_perf.merge_range(2, 0, 2, 7,
+            'Place Master_Results.xlsx in this folder to include prior days here.', f_perf_sub)
 
     # Column headers
-    ws_perf.set_row(2, 20)
+    ws_perf.set_row(3, 20)
     for ci, h in enumerate(['#', 'Scenario Name', 'Classification', 'W', 'L', 'Total', 'Win%', 'Net P/L']):
-        ws_perf.write(2, ci, h, f_perf_hdr)
-    ws_perf.freeze_panes(3, 0)
+        ws_perf.write(3, ci, h, f_perf_hdr)
+    ws_perf.freeze_panes(4, 0)
 
-    # The Results Tracker sheet name for COUNTIFS/SUMIF formulas
-    # Results Tracker col F = Scenario (e.g. "#01 BLOWOUT #1 - MJ")
-    # Results Tracker col H = Result (W or L)
-    # Results Tracker col I = Net P/L
-    tracker_sheet = "'📈 Results Tracker'"
-    # Data starts at row 4 in tracker (row index 3), no fixed end — use large range
-    tracker_range_end = max(track_row + 500, 1000)  # generous buffer for future entries
-    scen_col   = f'{tracker_sheet}!F$4:F${tracker_range_end}'   # Scenario column
-    result_col = f'{tracker_sheet}!H$4:H${tracker_range_end}'   # Result column
-    pl_col     = f'{tracker_sheet}!I$4:I${tracker_range_end}'   # Net P/L column
-
-    perf_row = 3
+    perf_row = 4
     for sid, sname, verdict, _ in SCENARIO_DEFS:
-        # Scenario identifier as it appears in the tracker (e.g. "#01 BLOWOUT #1 - MJ")
         scen_id_str = f'#{sid} {sname}'
 
-        # Classification format
         if verdict == 'CLEAR BET':   vfmt = f_perf_bet;  vlabel = 'CLEAR BET'
         elif verdict == 'CLEAR FADE': vfmt = f_perf_fade; vlabel = 'CLEAR FADE'
         else:                         vfmt = f_perf_inc;  vlabel = 'INCONSISTENT'
 
-        # Excel row for this perf row (1-indexed)
         er = perf_row + 1
 
         ws_perf.write(perf_row, 0, sid,     f_perf_sid)
         ws_perf.write(perf_row, 1, sname,   f_perf_name)
         ws_perf.write(perf_row, 2, vlabel,  vfmt)
 
-        # W = COUNTIFS(scen_col, scen_id_str, result_col, "W")
-        ws_perf.write_formula(perf_row, 3,
-            f'=COUNTIFS({scen_col},"{scen_id_str}",{result_col},"W")', f_perf_num)
-        # L
-        ws_perf.write_formula(perf_row, 4,
-            f'=COUNTIFS({scen_col},"{scen_id_str}",{result_col},"L")', f_perf_num)
-        # Total
-        ws_perf.write_formula(perf_row, 5,
-            f'=D{er}+E{er}', f_perf_num)
-        # Win%
-        ws_perf.write_formula(perf_row, 6,
-            f'=IF(F{er}>0,D{er}/F{er},"")', f_perf_pct)
-        # Net P/L = SUMIFS(pl_col, scen_col, scen_id_str)
-        ws_perf.write_formula(perf_row, 7,
-            f'=IFERROR(SUMIFS({pl_col},{scen_col},"{scen_id_str}"),0)',
-            f_perf_money)
+        if has_cumulative:
+            ws_perf.write_formula(perf_row, 3,
+                f'=IFERROR(COUNTIFS({cum_sc},"{scen_id_str}",{cum_rc},"W"),0)+IFERROR(COUNTIFS({tr_sc},"{scen_id_str}",{tr_rc},"W"),0)',
+                f_perf_num)
+            ws_perf.write_formula(perf_row, 4,
+                f'=IFERROR(COUNTIFS({cum_sc},"{scen_id_str}",{cum_rc},"L"),0)+IFERROR(COUNTIFS({tr_sc},"{scen_id_str}",{tr_rc},"L"),0)',
+                f_perf_num)
+            ws_perf.write_formula(perf_row, 7,
+                f'=IFERROR(SUMIFS({cum_pc},{cum_sc},"{scen_id_str}"),0)+IFERROR(SUMIFS({tr_pc},{tr_sc},"{scen_id_str}"),0)',
+                f_perf_money)
+        else:
+            ws_perf.write_formula(perf_row, 3,
+                f'=IFERROR(COUNTIFS({tr_sc},"{scen_id_str}",{tr_rc},"W"),0)', f_perf_num)
+            ws_perf.write_formula(perf_row, 4,
+                f'=IFERROR(COUNTIFS({tr_sc},"{scen_id_str}",{tr_rc},"L"),0)', f_perf_num)
+            ws_perf.write_formula(perf_row, 7,
+                f'=IFERROR(SUMIFS({tr_pc},{tr_sc},"{scen_id_str}"),0)', f_perf_money)
+
+        ws_perf.write_formula(perf_row, 5, f'=D{er}+E{er}', f_perf_num)
+        ws_perf.write_formula(perf_row, 6, f'=IF(F{er}>0,D{er}/F{er},"")', f_perf_pct)
 
         perf_row += 1
 
     # Totals row
     ws_perf.set_row(perf_row, 20)
-    ws_perf.write(perf_row, 0, '',        f_perf_total)
-    ws_perf.write(perf_row, 1, 'SEASON TOTALS', f_perf_total)
-    ws_perf.write(perf_row, 2, '',        f_perf_total)
-    ws_perf.write_formula(perf_row, 3, f'=SUM(D4:D{perf_row})', f_perf_total)
-    ws_perf.write_formula(perf_row, 4, f'=SUM(E4:E{perf_row})', f_perf_total)
-    ws_perf.write_formula(perf_row, 5, f'=SUM(F4:F{perf_row})', f_perf_total)
+    ws_perf.write(perf_row, 0, '', f_perf_total)
+    ws_perf.write(perf_row, 1, 'SEASON TOTALS' if has_cumulative else 'TODAY TOTALS', f_perf_total)
+    ws_perf.write(perf_row, 2, '', f_perf_total)
+    ws_perf.write_formula(perf_row, 3, f'=SUM(D5:D{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 4, f'=SUM(E5:E{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 5, f'=SUM(F5:F{perf_row})', f_perf_total)
     ws_perf.write_formula(perf_row, 6,
         f'=IF(F{perf_row+1}>0,D{perf_row+1}/F{perf_row+1},"")', f_perf_total)
-    ws_perf.write_formula(perf_row, 7, f'=SUM(H4:H{perf_row})', f_perf_total)
+    ws_perf.write_formula(perf_row, 7, f'=SUM(H5:H{perf_row})', f_perf_total)
 
     wb.close()
     print(f'\n✓ Report saved: {fname}')
@@ -1521,7 +1821,9 @@ if __name__ == '__main__':
 
     # 2. Fetch recent results to bring data current
     print('Checking for recent game results...')
-    df = fetch_recent_results(df, REPORT_DATE)
+    df, api_warnings = fetch_recent_results(df, REPORT_DATE)
+    for msg in api_warnings:
+        print(f'Warning: {msg}')
 
     # 3. Compute team states
     print('Computing team states...')
@@ -1536,6 +1838,8 @@ if __name__ == '__main__':
 
     # 5. Load odds — create template if missing
     odds = load_odds(games)
+    if odds:
+        save_odds_to_cache(REPORT_DATE, odds)
     if not odds:
         print('\nNo odds found. Creating odds input template...')
         create_odds_template(games, REPORT_DATE)
