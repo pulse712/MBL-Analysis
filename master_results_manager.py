@@ -5,6 +5,7 @@ Manages the cumulative Master_Results.xlsx file that stores all betting results
 across the entire season for scenario performance tracking.
 """
 
+import io
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -13,6 +14,85 @@ from datetime import datetime
 
 
 MASTER_FILE = 'Master_Results.xlsx'
+RESULTS_COLUMNS = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result', 'Net P/L']
+
+
+def _detect_header_row(probe_df):
+    """Return the row index that contains the 'Date' column header."""
+    for i in range(min(6, len(probe_df))):
+        row_vals = [str(v).strip() for v in probe_df.iloc[i].tolist()]
+        if 'Date' in row_vals:
+            return i
+    return 2
+
+
+def _find_results_sheet(sheet_names):
+    """
+    Pick the sheet that holds trackable results.
+    Accepts Master_Results.xlsx and daily reports (Results Tracker tab).
+    """
+    if 'Master Results' in sheet_names:
+        return 'Master Results', 'Master_Results.xlsx'
+    for name in sheet_names:
+        if name == 'Results Tracker' or 'Results Tracker' in name:
+            return name, 'daily report'
+    return None, None
+
+
+def _normalize_results_df(df):
+    """Normalize uploaded results to the standard 9-column layout."""
+    df = df.iloc[:, :9].copy()
+    df.columns = RESULTS_COLUMNS
+    df = df[df['Date'].notna()]
+    date_str = df['Date'].astype(str).str.strip().str.upper()
+    team_str = df['Team'].astype(str).str.strip().str.upper()
+    df = df[~date_str.str.contains('TOTAL', na=False)]
+    df = df[~team_str.str.contains('TOTAL', na=False)]
+    df = df[date_str.str.match(r'\d{4}-\d{2}-\d{2}', na=False)]
+    df['Result'] = df['Result'].astype(str).str.strip().str.upper()
+    df.loc[~df['Result'].isin(['W', 'L']), 'Result'] = ''
+    return df.reset_index(drop=True)
+
+
+def parse_results_upload(file_bytes):
+    """
+    Load trackable results from an uploaded Excel file.
+
+    Accepts:
+    - Master_Results.xlsx (Master Results sheet)
+    - MLB_Daily_Report_*.xlsx (Results Tracker sheet, with W/L entered)
+
+    Returns:
+        (DataFrame, source_label, sheet_name)
+    """
+    xl = pd.ExcelFile(io.BytesIO(file_bytes))
+    sheet, source = _find_results_sheet(xl.sheet_names)
+
+    if sheet is None:
+        for name in xl.sheet_names:
+            probe = pd.read_excel(io.BytesIO(file_bytes), sheet_name=name, header=None, nrows=6)
+            if 'Date' in [str(v).strip() for v in probe.iloc[_detect_header_row(probe)].tolist()]:
+                sheet, source = name, f'sheet "{name}"'
+                break
+
+    if sheet is None:
+        raise ValueError(
+            "No results data found. Upload Master_Results.xlsx (recommended) or a saved "
+            "daily report whose Results Tracker tab has W/L results entered."
+        )
+
+    probe = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None, nrows=6)
+    skip = _detect_header_row(probe)
+    df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, skiprows=skip)
+    df = _normalize_results_df(df)
+
+    if df.empty:
+        raise ValueError(
+            f"Found sheet '{sheet}' but no result rows. "
+            "Open the daily report, enter W/L on the Results Tracker tab, save, then upload."
+        )
+
+    return df, source, sheet
 
 
 def initialize_master_results():
@@ -225,19 +305,9 @@ def load_master_results():
         return None
 
     try:
-        # Read from row 4 onwards (skip title and headers)
-        df = pd.read_excel(MASTER_FILE, sheet_name='Master Results', skiprows=3)
-        
-        # Clean up column names
-        df.columns = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result', 'Net P/L']
-        
-        # Filter out empty rows
-        df = df[df['Date'].notna()]
-        
-        if df.empty:
-            return None
-            
-        return df
+        with open(MASTER_FILE, 'rb') as f:
+            df, _, _ = parse_results_upload(f.read())
+        return None if df.empty else df
     except Exception as e:
         print(f'Warning: Could not load master results: {e}')
         return None

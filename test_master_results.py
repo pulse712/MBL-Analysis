@@ -17,6 +17,7 @@ from master_results_manager import (
     load_master_results,
     get_cumulative_stats,
     get_master_results_path,
+    parse_results_upload,
     MASTER_FILE
 )
 
@@ -214,6 +215,51 @@ def test_file_references():
         return False
 
 
+def test_parse_daily_report_upload():
+    """Test 7: Parse results from a saved daily report (Results Tracker tab)"""
+    print("\n" + "="*60)
+    print("TEST 7: Parse Daily Report Upload")
+    print("="*60)
+
+    try:
+        import io
+        import xlsxwriter
+
+        buf = io.BytesIO()
+        wb = xlsxwriter.Workbook(buf, {'in_memory': True})
+        wb.add_worksheet('Green Clear Bet')
+        ws = wb.add_worksheet('Results Tracker')
+        ws.write(0, 0, 'RESULTS TRACKER')
+        ws.write(1, 0, 'Enter W or L')
+        headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
+        for col, h in enumerate(headers):
+            ws.write(2, col, h)
+        ws.write(3, 0, '2026-07-20')
+        ws.write(3, 1, 'New York Yankees')
+        ws.write(3, 2, 'HOME')
+        ws.write(3, 3, '-150')
+        ws.write(3, 4, 'BET NEW YORK YANKEES')
+        ws.write(3, 5, '#01 BLOWOUT #1 - MJ')
+        ws.write(3, 6, 'CLEAR BET')
+        ws.write(3, 7, 'W')
+        ws.write(3, 8, 66.67)
+        wb.close()
+        file_bytes = buf.getvalue()
+
+        df, source, sheet = parse_results_upload(file_bytes)
+
+        if source == 'daily report' and sheet == 'Results Tracker' and len(df) == 1:
+            if df.iloc[0]['Result'] == 'W' and str(df.iloc[0]['Date'])[:10] == '2026-07-20':
+                print("✅ SUCCESS: Parsed daily report Results Tracker with W/L")
+                return True
+
+        print(f"❌ FAILED: Unexpected parse result source={source} sheet={sheet} rows={len(df)}")
+        return False
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "="*70)
@@ -227,6 +273,7 @@ def run_all_tests():
         ("Cumulative Stats", test_cumulative_stats),
         ("W/L Entry Simulation", test_add_results_with_outcomes),
         ("Formula References", test_file_references),
+        ("Daily Report Upload", test_parse_daily_report_upload),
     ]
     
     results = []

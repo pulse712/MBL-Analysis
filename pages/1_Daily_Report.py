@@ -14,7 +14,6 @@ from daily_report import (
     NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line
 )
 from master_results_manager import parse_results_upload
-from master_results_manager import parse_results_upload
 
 # Narrow the sidebar
 st.markdown("""
