@@ -13,6 +13,8 @@ from daily_report import (
     check_scenarios, API_TO_CANONICAL, SCENARIO_DEFS,
     NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, title_case, fmt_line
 )
+from master_results_manager import parse_results_upload
+from master_results_manager import parse_results_upload
 
 # Narrow the sidebar
 st.markdown("""
@@ -275,37 +277,25 @@ st.markdown("---")
 
 # ── CUMULATIVE TRACKING — upload lives here, always visible ───────
 st.subheader("📊 Cumulative Season Tracking")
-st.caption("Upload your saved Master_Results.xlsx to preserve previous results. Then generate today's report and download the updated file.")
+st.caption(
+    "Upload a previous day's saved daily report (with W/L entered on Results Tracker) "
+    "or your cumulative Master_Results.xlsx. Then generate today's report."
+)
 
 uploaded = st.file_uploader(
-    "📤 Upload Master_Results.xlsx (optional — skip if starting fresh)",
+    "📤 Upload previous results (Master_Results.xlsx or saved daily report)",
     type=['xlsx'], key='master_upload'
 )
 
 existing_master_df = None
 if uploaded is not None:
     try:
-        # Try known sheet name first; fall back to first sheet if not found
-        xl = pd.ExcelFile(uploaded)
-        sheet = 'Master Results' if 'Master Results' in xl.sheet_names else xl.sheet_names[0]
-        # Detect how many header rows to skip by checking if row 0 or row 2 has 'Date'
-        probe = pd.read_excel(uploaded, sheet_name=sheet, header=None, nrows=5)
-        skip = 0
-        for i in range(5):
-            row_vals = [str(v).strip() for v in probe.iloc[i].tolist()]
-            if 'Date' in row_vals:
-                skip = i
-                break
-        else:
-            skip = 2  # default fallback
-        existing_master_df = pd.read_excel(uploaded, sheet_name=sheet, skiprows=skip)
-        # Normalize column count — keep only first 9 columns
-        existing_master_df = existing_master_df.iloc[:, :9]
-        existing_master_df.columns = ['Date','Team','H/A','Odds','Play','Scenario','Type','Result','Net P/L']
-        existing_master_df = existing_master_df[existing_master_df['Date'].notna()]
-        # Persist in session state so it survives the rerun when Generate is clicked
+        existing_master_df, source, sheet = parse_results_upload(uploaded.read())
         st.session_state['master_df'] = existing_master_df
-        st.success(f"✓ Loaded {len(existing_master_df)} existing results from your Master file (sheet: '{sheet}')")
+        st.success(
+            f"✓ Loaded {len(existing_master_df)} results from {source} "
+            f"(sheet: '{sheet}')"
+        )
     except Exception as e:
         st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
         st.session_state['master_df'] = None
@@ -321,13 +311,15 @@ if existing_master_df is not None and uploaded is None:
 
 with st.expander("ℹ️ How cumulative tracking works", expanded=False):
     st.markdown("""
-    **Simple 3-step workflow:**
-    1. **Upload** your saved `Master_Results.xlsx` here (if you have one from a previous session)
-    2. **Generate** today's report — new triggers are added automatically, old results preserved
-    3. **Download** the updated `Master_Results.xlsx` → open it → enter **W** or **L** → save it
-    4. **Next time** — upload that same file again before generating
+    **Simple daily workflow:**
+    1. **Upload** either:
+       - Your saved **daily report** from yesterday (with W/L entered on Results Tracker), **or**
+       - Your cumulative **Master_Results.xlsx** (recommended after day 2+)
+    2. **Generate** today's report — new triggers are added automatically, previous results preserved
+    3. **Download** the updated `Master_Results.xlsx` at the bottom → enter **W** or **L** for today → save it
+    4. **Next day** — upload that Master file (or yesterday's saved daily report) before generating
 
-    The file grows across the season as your full record. No server storage needed.
+    Tip: After day 1, always use the **Master_Results.xlsx** download — it accumulates the full season.
     """)
 
 st.markdown("---")
