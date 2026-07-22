@@ -999,6 +999,208 @@ def test_scatter_determine_dog_fav():
         return False
 
 
+def test_s24_no_false_positive_first_road_game():
+    """First game of a new road trip must not fire last_game_roadtrip / s24."""
+    print("\n" + "="*60)
+    print("TEST 29: S24 No False Positive First Road Game")
+    print("="*60)
+    try:
+        from daily_report import build_game_row, s24, last_game_roadtrip
+
+        state = {
+            'team': 'NEW YORK YANKEES', 'streak_before': 0, 'streak_before_prev': 0,
+            'prev_result': 'W', 'prev_opponent': 'BOSTON RED SOX', 'prev_line': -150,
+            'prev_runs_scored': 5, 'prev_runs_allowed': 2, 'series_game_num': 1, 'series_total': 3,
+            'homestand_game_num': 3, 'homestand_series_num': 1, 'roadtrip_game_num': 0, 'roadtrip_total': 0,
+            'last10_wins': 5, 'wins_before': 50, 'games_before': 100, 'winpct_before': 0.5,
+            'prev2_runs_scored': None, 'prev3_runs_scored': None, 'prev4_runs_scored': None,
+            'prev2_runs_allowed': None, 'prev3_runs_allowed': None, 'prev4_runs_allowed': None,
+            'division': 'AL_EAST',
+        }
+        row = build_game_row(state, 'away', 'BALTIMORE ORIOLES', 150)
+        if last_game_roadtrip(row):
+            print(f"❌ FAILED: last_game_roadtrip=True on road trip game 1 (rt={row['roadtrip_total']})")
+            return False
+        if s24(row):
+            print("❌ FAILED: s24 fired on first road game")
+            return False
+        print("✅ SUCCESS: First road game does not trigger s24")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
+def test_regenerate_preserves_same_day_wl():
+    """Re-generating same date keeps W/L already entered for matching triggers."""
+    print("\n" + "="*60)
+    print("TEST 30: Re-Generate Preserves Same-Day W/L")
+    print("="*60)
+    try:
+        import sys, os, importlib.util
+        from datetime import date
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'pages'))
+        spec = importlib.util.spec_from_file_location(
+            'daily_report_page',
+            os.path.join(os.path.dirname(__file__), 'pages', '1_Daily_Report.py'),
+        )
+        page = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(page)
+
+        bet = {
+            'verdict': 'CLEAR BET', 'line': -150, 'scenario_id': '01', 'scenario': 'B',
+            'team': 'NEW YORK YANKEES', 'opponent': 'BOSTON RED SOX',
+            'home_away': 'home', 'play': 'BET',
+        }
+        df1, _, _, _ = parse_results_upload(page.build_master_file(None, [bet], date(2026, 7, 21)))
+        df1.loc[0, 'Result'] = 'W'
+        df2, _, _, _ = parse_results_upload(page.build_master_file(df1, [bet], date(2026, 7, 21)))
+        if str(df2.iloc[0]['Result']).strip().upper() != 'W':
+            print(f"❌ FAILED: Result lost on re-generate: {df2.iloc[0]['Result']}")
+            return False
+        print("✅ SUCCESS: Same-day W/L preserved on re-generate")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
+def test_master_rebuild_fade_no_odds_fallback():
+    """build_master_file must not use faded-team Odds when PayoutLine missing for FADE."""
+    print("\n" + "="*60)
+    print("TEST 31: Master Rebuild FADE No Odds Fallback")
+    print("="*60)
+    try:
+        import sys, os, importlib.util, io
+        from datetime import date
+        from openpyxl import load_workbook
+        import pandas as pd
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'pages'))
+        spec = importlib.util.spec_from_file_location(
+            'daily_report_page',
+            os.path.join(os.path.dirname(__file__), 'pages', '1_Daily_Report.py'),
+        )
+        page = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(page)
+
+        legacy_row = {
+            'Date': '2026-07-20', 'Team': 'New York Yankees', 'H/A': 'HOME',
+            'Odds': '-150', 'Play': 'FADE', 'Scenario': '#02 Blowout', 'Type': 'CLEAR FADE',
+            'Result': '', 'Net P/L': None, 'PayoutLine': None, 'Opponent': 'BOSTON RED SOX',
+        }
+        existing = pd.DataFrame([legacy_row])
+        xbytes = page.build_master_file(existing, [], date(2026, 7, 21))
+        wb = load_workbook(io.BytesIO(xbytes))
+        ws = wb.active
+        formula = ws.cell(row=4, column=9).value
+        payout = ws.cell(row=4, column=10).value
+        if payout is not None and payout != '':
+            print(f"❌ FAILED: FADE row got payout line {payout} from Odds fallback")
+            return False
+        if formula and '-150' in str(formula):
+            print(f"❌ FAILED: FADE formula used faded Odds: {formula}")
+            return False
+        print("✅ SUCCESS: Master rebuild skips Odds fallback for CLEAR FADE")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
+def test_report_builder_cumulative_fade_no_odds_fallback():
+    """report_builder cumulative sheet must not use faded-team Odds for CLEAR FADE."""
+    print("\n" + "="*60)
+    print("TEST 32: Report Builder Cumulative FADE No Odds Fallback")
+    print("="*60)
+    try:
+        import io
+        import pandas as pd
+        from datetime import date
+        from openpyxl import load_workbook
+        import report_builder
+
+        legacy = pd.DataFrame([{
+            'Date': '2026-07-19', 'Team': 'New York Yankees', 'H/A': 'HOME',
+            'Odds': '-150', 'Play': 'FADE', 'Scenario': '#02 Blowout', 'Type': 'CLEAR FADE',
+            'Result': 'W', 'Net P/L': None, 'PayoutLine': None, 'Opponent': 'BOSTON RED SOX',
+        }])
+        xbytes, _, _, _ = report_builder.build_report_bytes(
+            [], [], date(2026, 7, 21), None, cumulative_df=legacy,
+        )
+        wb = load_workbook(io.BytesIO(xbytes))
+        ws = wb['Cumulative Results']
+        formula = ws.cell(row=4, column=9).value
+        payout = ws.cell(row=4, column=10).value
+        if payout is not None and payout != '':
+            print(f"❌ FAILED: FADE cumulative payout={payout}")
+            return False
+        if formula and '-150' in str(formula):
+            print(f"❌ FAILED: FADE formula used faded Odds: {formula}")
+            return False
+        print("✅ SUCCESS: Report builder cumulative skips Odds fallback for FADE")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
+def test_fetch_todays_schedule_api_error():
+    """Schedule fetch failures return an error message, not a silent empty list."""
+    print("\n" + "="*60)
+    print("TEST 33: Fetch Today's Schedule API Error")
+    print("="*60)
+    try:
+        import daily_report as dr
+        from datetime import date
+        from unittest.mock import patch
+        import requests
+
+        with patch('daily_report.requests.get', side_effect=requests.RequestException('timeout')):
+            games, err = dr.fetch_todays_schedule(date(2026, 7, 21))
+        if games:
+            print(f"❌ FAILED: Expected empty games, got {len(games)}")
+            return False
+        if not err or '2026-07-21' not in err:
+            print(f"❌ FAILED: Expected schedule error, got err={err}")
+            return False
+        print("✅ SUCCESS: Schedule API failure returns error message")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
+def test_report_builder_scenario_perf_range():
+    """Streamlit Scenario Performance COUNTIFS range uses +500 headroom (matches CLI)."""
+    print("\n" + "="*60)
+    print("TEST 34: Report Builder Scenario Perf Range +500")
+    print("="*60)
+    try:
+        import io
+        from datetime import date
+        from openpyxl import load_workbook
+        import report_builder
+
+        triggers = [{
+            'verdict': 'CLEAR BET', 'line': -150, 'scenario_id': '01', 'scenario': 'B',
+            'team': 'NEW YORK YANKEES', 'opponent': 'BOSTON RED SOX',
+            'home_away': 'home', 'play': 'BET',
+        }]
+        xbytes, _, _, _ = report_builder.build_report_bytes([], triggers, date(2026, 7, 21), None)
+        wb = load_workbook(io.BytesIO(xbytes))
+        formula = str(wb['Scenario Performance'].cell(row=5, column=4).value or '')
+        if 'F$1000' not in formula and 'F$504' not in formula and 'F$503' not in formula:
+            print(f"❌ FAILED: Expected wide Results Tracker range in formula, got {formula}")
+            return False
+        print("✅ SUCCESS: Scenario Performance uses +500 headroom")
+        return True
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
 def test_legacy_upload_notes():
     """Legacy 9-column upload returns upgrade notes."""
     print("\n" + "="*60)
@@ -1065,6 +1267,12 @@ def run_all_tests():
         ("Ambiguous Los Angeles Opponent", test_ambiguous_los_angeles_opponent),
         ("Scatter Determine Dog/Fav", test_scatter_determine_dog_fav),
         ("Legacy Upload Notes", test_legacy_upload_notes),
+        ("S24 No False Positive First Road Game", test_s24_no_false_positive_first_road_game),
+        ("Re-Generate Preserves Same-Day W/L", test_regenerate_preserves_same_day_wl),
+        ("Master Rebuild FADE No Odds Fallback", test_master_rebuild_fade_no_odds_fallback),
+        ("Report Builder Cumulative FADE No Odds Fallback", test_report_builder_cumulative_fade_no_odds_fallback),
+        ("Fetch Today's Schedule API Error", test_fetch_todays_schedule_api_error),
+        ("Report Builder Scenario Perf Range +500", test_report_builder_scenario_perf_range),
     ]
     
     results = []

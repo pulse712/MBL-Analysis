@@ -137,6 +137,7 @@ def build_master_file(existing_df, all_triggers, report_date):
     existing_rows = []
     existing_keys = set()
     today_str = report_date.strftime('%Y-%m-%d')
+    today_results = {}
 
     if existing_df is not None and not existing_df.empty:
         for _, row in existing_df.iterrows():
@@ -144,6 +145,9 @@ def build_master_file(existing_df, all_triggers, report_date):
                 d = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
             except Exception:
                 d = str(row.get('Date', '')).strip()[:10]
+            result = str(row.get('Result', '')).strip().upper()
+            if d == today_str and result in ('W', 'L'):
+                today_results[_master_dedup_key(row, d)] = result
             if d == today_str and all_triggers:
                 continue
             existing_rows.append(row)
@@ -161,7 +165,7 @@ def build_master_file(existing_df, all_triggers, report_date):
         pl_line = numeric_line(pl_line_for_trigger(t))
         if _dedup_key_variants(today_str, team_str, scen_str, opp, pl_line) & existing_keys:
             continue
-        existing_rows.append({
+        trigger_row = {
             'Date': today_str,
             'Team': team_str,
             'H/A':  t['home_away'].upper(),
@@ -174,7 +178,11 @@ def build_master_file(existing_df, all_triggers, report_date):
             'PayoutLine': pl_line,
             '_line': pl_line,
             '_opponent': opp,
-        })
+        }
+        saved = today_results.get(_master_dedup_key(trigger_row, today_str), '')
+        if saved in ('W', 'L'):
+            trigger_row['Result'] = saved
+        existing_rows.append(trigger_row)
         existing_keys.update(_dedup_key_variants(today_str, team_str, scen_str, opp, pl_line))
 
     for i, row in enumerate(existing_rows):
@@ -199,11 +207,12 @@ def build_master_file(existing_df, all_triggers, report_date):
 
         # Write P/L as an Excel formula so entering W/L directly in the file auto-calculates
         nc = ws.cell(r, 9)
-        # Prefer stored _line (payout line), fall back to PayoutLine col, then Odds
+        # Prefer stored _line (payout line), fall back to PayoutLine col, then Odds (not for FADE)
+        verdict_type = str(row.get('Type', '')).strip().upper()
         ln = numeric_line(line_val)
         if ln is None:
             ln = numeric_line(row.get('PayoutLine'))
-        if ln is None:
+        if ln is None and verdict_type != 'CLEAR FADE':
             ln = numeric_line(str(row.get('Odds', '')).replace('+', ''))
         if ln is not None:
             if ln > 0:
@@ -257,13 +266,17 @@ report_date_str = report_date.isoformat()
 with st.spinner("Loading team data and schedule..."):
     try:
         enriched, api_warnings = load_enriched_data(report_date_str)
-        games    = get_schedule(report_date_str)
+        games, schedule_err = get_schedule(report_date_str)
     except Exception as e:
         st.error(f"Error loading data: {e}")
         st.stop()
 
 for msg in api_warnings:
     st.warning(f"⚠️ Recent results may be incomplete: {msg}")
+
+if schedule_err:
+    st.error(f"⚠️ Could not load schedule: {schedule_err}")
+    st.stop()
 
 no_games = not games
 if no_games:
@@ -523,13 +536,15 @@ def build_heatmap_data():
     vectorized pandas — no row-by-row iteration.
     Returns a summary DataFrame with W, L, Win% per scenario.
     """
+    from datetime import date as _date
     from daily_report import (
-        load_historical_data, compute_all_states, SCENARIO_DEFS,
+        load_historical_data, fetch_recent_results, compute_all_states, SCENARIO_DEFS,
         NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP,
         build_streak_lookup, build_opp_road_wpct_lookup, backtest_wl_counts,
     )
 
     df = load_historical_data()
+    df, _ = fetch_recent_results(df, _date.today())
     df = compute_all_states(df)
     df = df[df['result'].isin(['W', 'L'])].copy()
 

@@ -11,6 +11,7 @@ from daily_report import (
     pl_line_for_trigger,
     title_case,
 )
+from master_results_manager import _payout_line_from_row
 
 
 def build_report_bytes(games, triggers, report_date, odds, cumulative_df=None):
@@ -185,9 +186,7 @@ def build_report_bytes(games, triggers, report_date, odds, cumulative_df=None):
             w_cum.write(cum_row, 6, str(row.get('Type', '')), ftc)
             res = str(row.get('Result', '') or '').strip().upper()
             w_cum.write(cum_row, 7, res if res in ('W', 'L') else '', fti if res in ('W', 'L') else ftc)
-            payout = numeric_line(row.get('PayoutLine'))
-            if payout is None:
-                payout = numeric_line(str(row.get('Odds', '')).replace('+', ''))
+            payout = _payout_line_from_row(row)
             if payout is not None:
                 pf = (f'=IF(H{er}="W",{payout},IF(H{er}="L",-100,""))' if payout > 0
                       else f'=IF(H{er}="W",ROUND(100/ABS({payout})*100,2),IF(H{er}="L",-100,""))')
@@ -219,7 +218,7 @@ def build_report_bytes(games, triggers, report_date, odds, cumulative_df=None):
     fpnote=wb.add_format({"font_size":9,"font_name":"Calibri","italic":True,"font_color":"#7D5A00","bg_color":"#FFF9E6","align":"center","valign":"vcenter","border":1,"text_wrap":True})
 
     w5.set_row(0,28); w5.set_row(1,16); w5.set_row(2,22)
-    tr_end = max(tr + 50, 200)
+    tr_end = max(tr + 500, 1000)
     tr_sc = "'Results Tracker'!F$4:F$" + str(tr_end)
     tr_rc = "'Results Tracker'!H$4:H$" + str(tr_end)
     tr_pc = "'Results Tracker'!I$4:I$" + str(tr_end)
@@ -227,7 +226,7 @@ def build_report_bytes(games, triggers, report_date, odds, cumulative_df=None):
         w5.merge_range(0,0,0,7,"SCENARIO PERFORMANCE TRACKER  -  Season Cumulative",fpb)
         w5.merge_range(1,0,1,7,"Prior days from uploaded master + today from Results Tracker (enter W/L there).",fps)
         w5.merge_range(2,0,2,7,"Download Master_Results.xlsx below to persist season totals across days.",fpnote)
-        cum_end = max(cum_data_end + 50, 200)
+        cum_end = max(cum_data_end + 500, 1000)
         cum_sc = "'Cumulative Results'!F$4:F$" + str(cum_end)
         cum_rc = "'Cumulative Results'!H$4:H$" + str(cum_end)
         cum_pc = "'Cumulative Results'!I$4:I$" + str(cum_end)

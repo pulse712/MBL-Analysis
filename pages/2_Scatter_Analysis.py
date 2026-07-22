@@ -55,22 +55,23 @@ def get_team_winpcts(report_date_str):
 
 @st.cache_data(ttl=1800, show_spinner="Fetching today's schedule...")
 def get_todays_games(report_date_str):
-    """Fetch today's schedule from MLB Stats API."""
+    """Fetch today's schedule from MLB Stats API. Returns (games, error)."""
     url = f'https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={report_date_str}'
     try:
         r = requests.get(url, timeout=10)
+        r.raise_for_status()
         data = r.json()
-    except Exception:
-        return []
+    except Exception as e:
+        return [], f'Could not fetch schedule for {report_date_str}: {e}'
 
     games = []
     if not data.get('dates'):
-        return []
+        return [], None
     for g in data['dates'][0]['games']:
         away = g['teams']['away']['team']['name']
         home = g['teams']['home']['team']['name']
         games.append({'away': away, 'home': home})
-    return games
+    return games, None
 
 
 def determine_dog_fav(game, winpcts):
@@ -280,19 +281,20 @@ if show_line:
     ))
 
 # ── TODAY'S GAMES ─────────────────────────────────────────────────
-today_points = []  # always initialized
+today_points = []
+schedule_err = None
 if show_today:
-    today_points = []
     winpcts  = get_team_winpcts(report_date_str)
-    today_games = get_todays_games(report_date_str)
-
-    today_points = []
-    for g in today_games:
-        info = determine_dog_fav(g, winpcts)
-        if info:
-            is_above = above_line(info['dog_wp'], info['fav_wp'], lx1, ly1, lx2, ly2)
-            info['above_line'] = is_above
-            today_points.append(info)
+    today_games, schedule_err = get_todays_games(report_date_str)
+    if schedule_err:
+        st.warning(f"⚠️ Could not load today's games: {schedule_err}")
+    else:
+        for g in today_games:
+            info = determine_dog_fav(g, winpcts)
+            if info and info['dog_loc'] in dog_locations:
+                is_above = above_line(info['dog_wp'], info['fav_wp'], lx1, ly1, lx2, ly2)
+                info['above_line'] = is_above
+                today_points.append(info)
 
     if today_points:
         tx = [p['dog_wp'] for p in today_points]
@@ -432,9 +434,9 @@ if show_today and today_points:
     else:
         st.info("No games fall above the dividing line today")
 
-elif show_today:
+elif show_today and not schedule_err:
     st.markdown("---")
-    st.info(f"No games scheduled for {report_date.strftime('%B %d, %Y')} or unable to fetch schedule.")
+    st.info(f"No games scheduled for {report_date.strftime('%B %d, %Y')} match the current filters.")
 
 # ── INTERPRETATION GUIDE ──────────────────────────────────────────
 with st.expander("ℹ️ How to read this chart", expanded=False):

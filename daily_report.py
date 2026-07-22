@@ -210,19 +210,27 @@ def load_historical_data():
 # ─────────────────────────────────────────────
 
 def fetch_todays_schedule(report_date):
+    """
+    Fetch today's MLB schedule.
+
+    Returns:
+        (games, error) — error is None on success; a message string on HTTP/network failure.
+        An empty games list with error=None means a legitimate off-day (no games scheduled).
+    """
     date_str = report_date.strftime('%Y-%m-%d')
     url = f'https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}'
     try:
         r = requests.get(url, timeout=10)
+        r.raise_for_status()
         data = r.json()
     except Exception as e:
         print(f'ERROR fetching schedule: {e}')
-        return []
+        return [], f'Could not fetch schedule for {date_str}: {e}'
 
     games = []
     if not data.get('dates'):
         print(f'No games found for {date_str}')
-        return []
+        return [], None
 
     for g in data['dates'][0]['games']:
         away_api = g['teams']['away']['team']['name']
@@ -237,7 +245,7 @@ def fetch_todays_schedule(report_date):
             'game_pk':   g['gamePk'],
         })
     print(f'Schedule: {len(games)} games on {date_str}')
-    return games
+    return games, None
 
 # ─────────────────────────────────────────────
 # ODDS CACHE (persist moneylines for API-fetched games)
@@ -771,8 +779,10 @@ def build_game_row(state, home_away, opponent, line):
             rg = state['roadtrip_game_num'] + 1
             rt_total = max(state['roadtrip_total'], rg)
         else:
+            # New road trip (or segment ended): use open-segment buffer (seg_len+2)
+            # so last_game_roadtrip does not fire on game 1 of every trip.
             rg = 1
-            rt_total = 1
+            rt_total = 3
         hg = 0
         hs_series = 0
 
@@ -1653,9 +1663,8 @@ def build_report(games, triggers, report_date, odds):
             w_cum.write(cum_row, 6, str(row.get('Type', '')), f_track_cell)
             res = str(row.get('Result', '') or '').strip().upper()
             w_cum.write(cum_row, 7, res if res in ('W', 'L') else '', f_input_cell if res in ('W', 'L') else f_track_cell)
-            payout = numeric_line(row.get('PayoutLine'))
-            if payout is None:
-                payout = numeric_line(str(row.get('Odds', '')).replace('+', ''))
+            from master_results_manager import _payout_line_from_row
+            payout = _payout_line_from_row(row)
             if payout is not None:
                 pf = (f'=IF(H{er}="W",{payout},IF(H{er}="L",-100,""))' if payout > 0
                       else f'=IF(H{er}="W",ROUND(100/ABS({payout})*100,2),IF(H{er}="L",-100,""))')
@@ -1831,7 +1840,10 @@ if __name__ == '__main__':
 
     # 4. Fetch today's schedule
     print('Fetching today\'s schedule...')
-    games = fetch_todays_schedule(REPORT_DATE)
+    games, schedule_err = fetch_todays_schedule(REPORT_DATE)
+    if schedule_err:
+        print(f'ERROR: {schedule_err}')
+        sys.exit(1)
     if not games:
         print('No games today. Exiting.')
         sys.exit(0)
