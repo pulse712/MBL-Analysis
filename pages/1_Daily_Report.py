@@ -155,13 +155,19 @@ def build_report_bytes(games, triggers, report_date, odds):
     for ci,h in enumerate(['Date','Team','H/A','Odds','Play','Scenario','Type','Result (W/L)','Net P/L ($100)']): w4.write(2,ci,h,fth)
     tr=3
     for t in triggers:
-        line=t['line']; er=tr+1
+        line=t['line']
+        # For FADE plays use opponent line (betting the other side); fall back to faded team line
+        pl_line = t.get('opp_line') if t['verdict'] == 'CLEAR FADE' else line
+        if pl_line is None:
+            pl_line = line
+        er=tr+1
         w4.write(tr,0,report_date.strftime('%Y-%m-%d'),ftc); w4.write(tr,1,title_case(t['team']),ftl)
         w4.write(tr,2,t['home_away'].upper(),ftc); w4.write(tr,3,fmt_line(line),ftc)
         w4.write(tr,4,t['play'],ftl); w4.write(tr,5,f"#{t['scenario_id']} {t['scenario']}",ftl)
         w4.write(tr,6,t['verdict'],ftc); w4.write(tr,7,'',fti)
-        if line is not None and isinstance(line,int):
-            pf=f'=IF(H{er}="W",{line},IF(H{er}="L",-100,""))' if line>0 else f'=IF(H{er}="W",ROUND(100/ABS({line})*100,2),IF(H{er}="L",-100,""))'
+        if pl_line is not None and isinstance(pl_line,(int,float)) and int(pl_line)==pl_line:
+            pl_line=int(pl_line)
+            pf=f'=IF(H{er}="W",{pl_line},IF(H{er}="L",-100,""))' if pl_line>0 else f'=IF(H{er}="W",ROUND(100/ABS({pl_line})*100,2),IF(H{er}="L",-100,""))'
             w4.write_formula(tr,8,pf,ftc)
         else: w4.write(tr,8,'',ftc)
         tr+=1
@@ -246,35 +252,14 @@ with st.spinner("Loading team data and schedule..."):
         st.error(f"Error loading data: {e}")
         st.stop()
 
-if not games:
+no_games = not games
+if no_games:
     st.warning("No games scheduled for this date.")
-    st.stop()
-
-st.success(f"✓ {len(games)} games scheduled for {report_date.strftime('%A, %B %d, %Y')}")
+else:
+    st.success(f"✓ {len(games)} games scheduled for {report_date.strftime('%A, %B %d, %Y')}")
 st.markdown("---")
 
-
-
-st.subheader("📋 Enter Today's Moneylines")
-st.caption("Enter the moneyline for each team (e.g. 130 for +130, -150 for -150). Leave blank if unavailable.")
-
-odds_data = [{'Away Team': g['away_team'], 'Home Team': g['home_team'], 'Away Line': None, 'Home Line': None} for g in games]
-odds_df = pd.DataFrame(odds_data)
-edited = st.data_editor(
-    odds_df,
-    column_config={
-        'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width=220),
-        'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width=220),
-        'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width=120),
-        'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width=120),
-    },
-    hide_index=True, use_container_width=True,
-    height=(len(odds_df) + 1) * 35 + 3,
-)
-
-st.markdown("---")
-
-# ── CUMULATIVE TRACKING — upload lives here, always visible ───────
+# ── CUMULATIVE TRACKING — upload always visible (even on off-days) ───────
 st.subheader("📊 Cumulative Season Tracking")
 st.caption(
     "Upload a previous day's saved daily report (with W/L entered on Results Tracker) "
@@ -323,98 +308,121 @@ with st.expander("ℹ️ How cumulative tracking works", expanded=False):
 
 st.markdown("---")
 
-if st.button("⚾ Generate Daily Report", type="primary", use_container_width=True):
-    odds = {}
-    for _, row in edited.iterrows():
-        if row['Away Line'] is not None and str(row['Away Line']) not in ['','nan']:
-            try: odds[str(row['Away Team']).upper()] = int(row['Away Line'])
-            except: pass
-        if row['Home Line'] is not None and str(row['Home Line']) not in ['','nan']:
-            try: odds[str(row['Home Team']).upper()] = int(row['Home Line'])
-            except: pass
+# ── MONEYLINES + GENERATE (only when games are scheduled) ─────────
+if no_games:
+    st.info("No games scheduled for this date. You can still upload master results above.")
+else:
+    st.subheader("📋 Enter Today's Moneylines")
+    st.caption("Enter the moneyline for each team (e.g. 130 for +130, -150 for -150). Leave blank if unavailable.")
 
-    if not odds:
-        st.warning("Please enter at least some moneylines before generating the report.")
-        st.stop()
-
-    with st.spinner("Running scenario analysis..."):
-        opp_streaks = {}; opp_road_wpct = {}
-        for team in API_TO_CANONICAL.values():
-            tdf = enriched[(enriched['team']==team) & (enriched['date'].dt.date < report_date)]
-            if not tdf.empty:
-                last = tdf.iloc[-1]
-                sb = last['streak_before']; res = last['result']
-                opp_streaks[team] = (sb+1 if sb>=0 else 1) if res=='W' else (sb-1 if sb<=0 else -1)
-                road = tdf[tdf['home_away']=='away']
-                if not road.empty:
-                    rw=(road['result']=='W').sum(); rl=(road['result']=='L').sum()
-                    opp_road_wpct[team] = rw/(rw+rl) if (rw+rl)>0 else None
-
-        all_triggers = []
-        for g in games:
-            away, home = g['away_team'], g['home_team']
-            away_state = get_team_state(enriched, away, report_date)
-            home_state = get_team_state(enriched, home, report_date)
-            away_row = build_game_row(away_state, 'away', home, odds.get(away))
-            home_row = build_game_row(home_state, 'home', away, odds.get(home))
-            all_triggers.extend(check_scenarios([away_row, home_row], opp_streaks, opp_road_wpct))
-
-        excel_bytes, n_total, n_fade, n_inc = build_report_bytes(games, all_triggers, report_date, odds)
+    odds_data = [{'Away Team': g['away_team'], 'Home Team': g['home_team'], 'Away Line': None, 'Home Line': None} for g in games]
+    odds_df = pd.DataFrame(odds_data)
+    edited = st.data_editor(
+        odds_df,
+        column_config={
+            'Away Team': st.column_config.TextColumn('Away Team', disabled=True, width=220),
+            'Home Team': st.column_config.TextColumn('Home Team', disabled=True, width=220),
+            'Away Line': st.column_config.NumberColumn('Away Line', help='e.g. 130 or -150', width=120),
+            'Home Line': st.column_config.NumberColumn('Home Line', help='e.g. -130 or 150', width=120),
+        },
+        hide_index=True, use_container_width=True,
+        height=(len(odds_df) + 1) * 35 + 3,
+    )
 
     st.markdown("---")
-    st.subheader("📊 Results")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Games", len(games))
-    m2.metric("🟢 Clear Bet", sum(1 for t in all_triggers if t['verdict']=='CLEAR BET'))
-    m3.metric("🔴 Clear Fade", sum(1 for t in all_triggers if t['verdict']=='CLEAR FADE'))
-    m4.metric("🟡 Inconsistent", sum(1 for t in all_triggers if t['verdict']=='INCONSISTENT'))
 
-    for section_label, section_verdict in [
-        ("🟢 Clear Bet Plays", "CLEAR BET"),
-        ("🔴 Clear Fade Plays", "CLEAR FADE"),
-        ("🟡 Inconsistent Plays", "INCONSISTENT"),
-    ]:
-        section_triggers = [t for t in all_triggers if t['verdict']==section_verdict]
-        if not section_triggers: continue
-        st.markdown(f"### {section_label}")
-        game_rows = []
-        seen = set()
-        for g in games:
-            away, home = g['away_team'], g['home_team']
-            key = f"{away}@{home}"
-            if key in seen: continue
-            at = [t for t in section_triggers if t['team']==away and t['opponent']==home]
-            ht = [t for t in section_triggers if t['team']==home and t['opponent']==away]
-            if not at and not ht: continue
-            seen.add(key)
-            matchup = f"{title_case(away)} @ {title_case(home)}"
-            game_rows.append({'GAME': matchup, 'H/A': 'AWAY', 'Team': title_case(away),
-                'Odds': fmt_line(odds.get(away)),
-                'Play': at[0]['play'] if at else '',
-                'Scenario': f"#{at[0]['scenario_id']} {at[0]['scenario']}" if at else ''})
-            game_rows.append({'GAME': '', 'H/A': 'HOME', 'Team': title_case(home),
-                'Odds': fmt_line(odds.get(home)),
-                'Play': ht[0]['play'] if ht else '',
-                'Scenario': f"#{ht[0]['scenario_id']} {ht[0]['scenario']}" if ht else ''})
-        if game_rows:
-            n_rows = len(game_rows)
-            st.dataframe(pd.DataFrame(game_rows),
-                use_container_width=True, hide_index=True,
-                height=(n_rows + 1) * 35 + 3,
-                column_config={
-                    'GAME': st.column_config.TextColumn('GAME', width=300),
-                    'H/A':  st.column_config.TextColumn('H/A',  width=60),
-                    'Team': st.column_config.TextColumn('Team', width=180),
-                    'Odds': st.column_config.TextColumn('Odds', width=70),
-                    'Play': st.column_config.TextColumn('Play', width=200),
-                    'Scenario': st.column_config.TextColumn('Scenario', width=320),
-                })
+    if st.button("⚾ Generate Daily Report", type="primary", use_container_width=True):
+        odds = {}
+        for _, row in edited.iterrows():
+            if row['Away Line'] is not None and str(row['Away Line']) not in ['','nan']:
+                try: odds[str(row['Away Team']).upper()] = int(float(row['Away Line']))
+                except: pass
+            if row['Home Line'] is not None and str(row['Home Line']) not in ['','nan']:
+                try: odds[str(row['Home Team']).upper()] = int(float(row['Home Line']))
+                except: pass
 
-    st.markdown("---")
-    fname = f'MLB_Daily_Report_{report_date.strftime("%Y-%m-%d")}.xlsx'
-    st.download_button(label="📥 Download Excel Report", data=excel_bytes, file_name=fname,
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        use_container_width=True, type="primary")
+        if not odds:
+            st.warning("Please enter at least some moneylines before generating the report.")
+            st.stop()
+
+        with st.spinner("Running scenario analysis..."):
+            opp_streaks = {}; opp_road_wpct = {}
+            for team in API_TO_CANONICAL.values():
+                tdf = enriched[(enriched['team']==team) & (enriched['date'].dt.date < report_date)]
+                if not tdf.empty:
+                    last = tdf.iloc[-1]
+                    sb = last['streak_before']; res = last['result']
+                    opp_streaks[team] = (sb+1 if sb>=0 else 1) if res=='W' else (sb-1 if sb<=0 else -1)
+                    road = tdf[tdf['home_away']=='away']
+                    if not road.empty:
+                        rw=(road['result']=='W').sum(); rl=(road['result']=='L').sum()
+                        opp_road_wpct[team] = rw/(rw+rl) if (rw+rl)>0 else None
+
+            all_triggers = []
+            for g in games:
+                away, home = g['away_team'], g['home_team']
+                away_state = get_team_state(enriched, away, report_date)
+                home_state = get_team_state(enriched, home, report_date)
+                away_row = build_game_row(away_state, 'away', home, odds.get(away))
+                home_row = build_game_row(home_state, 'home', away, odds.get(home))
+                all_triggers.extend(check_scenarios([away_row, home_row], opp_streaks, opp_road_wpct, odds))
+
+            excel_bytes, n_total, n_fade, n_inc = build_report_bytes(games, all_triggers, report_date, odds)
+
+        st.markdown("---")
+        st.subheader("📊 Results")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Games", len(games))
+        m2.metric("🟢 Clear Bet", sum(1 for t in all_triggers if t['verdict']=='CLEAR BET'))
+        m3.metric("🔴 Clear Fade", sum(1 for t in all_triggers if t['verdict']=='CLEAR FADE'))
+        m4.metric("🟡 Inconsistent", sum(1 for t in all_triggers if t['verdict']=='INCONSISTENT'))
+
+        for section_label, section_verdict in [
+            ("🟢 Clear Bet Plays", "CLEAR BET"),
+            ("🔴 Clear Fade Plays", "CLEAR FADE"),
+            ("🟡 Inconsistent Plays", "INCONSISTENT"),
+        ]:
+            section_triggers = [t for t in all_triggers if t['verdict']==section_verdict]
+            if not section_triggers: continue
+            st.markdown(f"### {section_label}")
+            game_rows = []
+            seen = set()
+            for g in games:
+                away, home = g['away_team'], g['home_team']
+                key = f"{away}@{home}"
+                if key in seen: continue
+                at = [t for t in section_triggers if t['team']==away and t['opponent']==home]
+                ht = [t for t in section_triggers if t['team']==home and t['opponent']==away]
+                if not at and not ht: continue
+                seen.add(key)
+                matchup = f"{title_case(away)} @ {title_case(home)}"
+                game_rows.append({'GAME': matchup, 'H/A': 'AWAY', 'Team': title_case(away),
+                    'Odds': fmt_line(odds.get(away)),
+                    'Play': at[0]['play'] if at else '',
+                    'Scenario': f"#{at[0]['scenario_id']} {at[0]['scenario']}" if at else ''})
+                game_rows.append({'GAME': '', 'H/A': 'HOME', 'Team': title_case(home),
+                    'Odds': fmt_line(odds.get(home)),
+                    'Play': ht[0]['play'] if ht else '',
+                    'Scenario': f"#{ht[0]['scenario_id']} {ht[0]['scenario']}" if ht else ''})
+            if game_rows:
+                n_rows = len(game_rows)
+                st.dataframe(pd.DataFrame(game_rows),
+                    use_container_width=True, hide_index=True,
+                    height=(n_rows + 1) * 35 + 3,
+                    column_config={
+                        'GAME': st.column_config.TextColumn('GAME', width=300),
+                        'H/A':  st.column_config.TextColumn('H/A',  width=60),
+                        'Team': st.column_config.TextColumn('Team', width=180),
+                        'Odds': st.column_config.TextColumn('Odds', width=70),
+                        'Play': st.column_config.TextColumn('Play', width=200),
+                        'Scenario': st.column_config.TextColumn('Scenario', width=320),
+                    })
+
+        st.markdown("---")
+        fname = f'MLB_Daily_Report_{report_date.strftime("%Y-%m-%d")}.xlsx'
+        st.download_button(label="📥 Download Excel Report", data=excel_bytes, file_name=fname,
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            use_container_width=True, type="primary")
 
     # ── CUMULATIVE TRACKING — download updated master file ─────────
     st.markdown("---")
@@ -488,7 +496,12 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         if existing_df is not None and not existing_df.empty:
             for _, row in existing_df.iterrows():
                 existing_rows.append(row)
-                existing_keys.add((str(row.get('Date','')), str(row.get('Team','')), str(row.get('Scenario',''))))
+                # Normalize date to YYYY-MM-DD to avoid Timestamp vs string mismatch
+                try:
+                    d = pd.to_datetime(row.get('Date','')).strftime('%Y-%m-%d')
+                except Exception:
+                    d = str(row.get('Date','')).strip()[:10]
+                existing_keys.add((d, str(row.get('Team','')), str(row.get('Scenario',''))))
 
         # Add today's triggers if not already in the file
         today_str = report_date.strftime('%Y-%m-%d')
@@ -585,14 +598,21 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
         out.seek(0)
         return out.getvalue()
 
-    master_bytes = build_master_file(existing_master_df)
-    st.download_button(
-        label="📥 Download Master_Results.xlsx  (open → enter W/L → re-upload next time)",
-        data=master_bytes,
-        file_name='Master_Results.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        use_container_width=True,
-    )
+        master_bytes = build_master_file(existing_master_df)
+        # Update session state with merged data so re-clicking Generate won't duplicate today's rows
+        try:
+            import io as _io
+            merged_df, _, _ = parse_results_upload(master_bytes)
+            st.session_state['master_df'] = merged_df
+        except Exception:
+            pass
+        st.download_button(
+            label="📥 Download Master_Results.xlsx  (open → enter W/L → re-upload next time)",
+            data=master_bytes,
+            file_name='Master_Results.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            use_container_width=True,
+        )
 
 
 

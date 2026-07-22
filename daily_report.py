@@ -883,11 +883,14 @@ def load_odds(games):
 # STEP 8: RUN SCENARIOS FOR TODAY'S GAMES
 # ─────────────────────────────────────────────
 
-def check_scenarios(game_rows, opp_streaks, opp_road_wpct):
+def check_scenarios(game_rows, opp_streaks, opp_road_wpct, opp_lines=None):
     """
     For each team row (away/home), check all 36 scenarios.
     Returns list of triggered scenario results.
+    opp_lines: dict of team -> moneyline (used to store correct P/L line for FADE plays)
     """
+    if opp_lines is None:
+        opp_lines = {}
     triggers = []
     for row in game_rows:
         if row is None: continue
@@ -915,15 +918,19 @@ def check_scenarios(game_rows, opp_streaks, opp_road_wpct):
                     play = f'BET {team.title()}'
                 else:
                     play = f'WATCH {team.title()}'
+                # For FADE plays, P/L is based on betting the OPPONENT (the dog side)
+                # Store opponent_line so the Results Tracker uses the correct payout line
+                opp_line = opp_lines.get(opp) if verdict == 'CLEAR FADE' else None
                 triggers.append({
-                    'team':     team,
-                    'opponent': opp,
-                    'home_away': ha,
-                    'line':     line,
+                    'team':        team,
+                    'opponent':    opp,
+                    'home_away':   ha,
+                    'line':        line,
+                    'opp_line':    opp_line,
                     'scenario_id': sid,
-                    'scenario': sname,
-                    'verdict':  verdict,
-                    'play':     play,
+                    'scenario':    sname,
+                    'verdict':     verdict,
+                    'play':        play,
                 })
     return triggers
 
@@ -1544,7 +1551,7 @@ if __name__ == '__main__':
         away_row = build_game_row(away_state, 'away', home, away_line)
         home_row = build_game_row(home_state, 'home', away, home_line)
 
-        triggers = check_scenarios([away_row, home_row], opp_streaks, opp_road_wpct)
+        triggers = check_scenarios([away_row, home_row], opp_streaks, opp_road_wpct, odds)
         all_triggers.extend(triggers)
 
     # 8. Build report

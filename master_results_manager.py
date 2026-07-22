@@ -44,6 +44,13 @@ def _normalize_results_df(df):
     df = df.iloc[:, :9].copy()
     df.columns = RESULTS_COLUMNS
     df = df[df['Date'].notna()]
+    # Normalize Date to YYYY-MM-DD string regardless of how pandas read it
+    def _fmt_date(v):
+        try:
+            return pd.to_datetime(v).strftime('%Y-%m-%d')
+        except Exception:
+            return str(v).strip()
+    df['Date'] = df['Date'].apply(_fmt_date)
     date_str = df['Date'].astype(str).str.strip().str.upper()
     team_str = df['Team'].astype(str).str.strip().str.upper()
     df = df[~date_str.str.contains('TOTAL', na=False)]
