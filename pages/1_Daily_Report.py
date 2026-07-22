@@ -293,7 +293,6 @@ with c_refresh:
     if st.button("🔄 Refresh game data cache", use_container_width=True):
         load_enriched_data.clear()
         get_schedule.clear()
-        build_heatmap_data.clear()
         st.rerun()
 
 existing_master_df = None
@@ -584,6 +583,9 @@ def build_heatmap_data():
     return pd.DataFrame(rows)
 
 with st.expander("Click to view heatmap", expanded=False):
+    if st.button("🔄 Refresh heatmap cache", key="heatmap_refresh"):
+        build_heatmap_data.clear()
+        st.rerun()
     with st.spinner("Running scenarios against historical data… (first load ~30 sec, then cached)"):
         hmap = build_heatmap_data()
 
