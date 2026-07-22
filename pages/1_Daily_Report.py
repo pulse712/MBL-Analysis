@@ -349,21 +349,20 @@ def build_master_file(existing_df, all_triggers, report_date):
         rc.alignment = Alignment(horizontal='center', vertical='center')
         rc.border = input_border
 
+        # Write P/L as an Excel formula so entering W/L directly in the file auto-calculates
         nc = ws.cell(r, 9)
-        if result in ('W', 'L'):
-            ln = numeric_line(line_val)
-            if ln is None:
-                ln = numeric_line(str(row.get('Odds', '')).replace('+', ''))
-            if ln is not None:
-                if result == 'W':
-                    nc.value = round(100 / abs(ln) * 100, 2) if ln < 0 else ln
-                else:
-                    nc.value = -100.0
+        ln = numeric_line(line_val)
+        if ln is None:
+            ln = numeric_line(str(row.get('Odds', '')).replace('+', ''))
+        if ln is not None:
+            if ln > 0:
+                nc.value = f'=IF(H{r}="W",{ln},IF(H{r}="L",-100,""))'
             else:
-                uploaded_pl = row.get('Net P/L')
-                nc.value = uploaded_pl if pd.notna(uploaded_pl) and uploaded_pl != '' else ''
+                nc.value = f'=IF(H{r}="W",ROUND(100/ABS({ln})*100,2),IF(H{r}="L",-100,""))'
         else:
-            nc.value = ''
+            # No line available — preserve any previously saved static value
+            uploaded_pl = row.get('Net P/L')
+            nc.value = uploaded_pl if pd.notna(uploaded_pl) and uploaded_pl != '' else ''
         nc.alignment = Alignment(horizontal='center', vertical='center')
         nc.border = std_border
 
@@ -381,13 +380,8 @@ def build_master_file(existing_df, all_triggers, report_date):
         tc.font = Font(bold=True, color='FFFFFF', name='Calibri')
         tc.fill = GREEN_FILL
         tc.alignment = Alignment(horizontal='center', vertical='center')
-        total_pl = sum(
-            (ws.cell(i + 4, 9).value or 0)
-            for i in range(len(existing_rows))
-            if isinstance(ws.cell(i + 4, 9).value, (int, float))
-        )
         tc2 = ws.cell(tr, 9)
-        tc2.value = round(total_pl, 2)
+        tc2.value = f'=SUMIF(H4:H{tr-1},"W",I4:I{tr-1})+SUMIF(H4:H{tr-1},"L",I4:I{tr-1})'
         tc2.font = Font(bold=True, color='FFFFFF', name='Calibri')
         tc2.fill = GREEN_FILL
         tc2.alignment = Alignment(horizontal='center', vertical='center')
@@ -443,8 +437,8 @@ if uploaded is not None:
             f"(sheet: '{sheet}')"
         )
     except Exception as e:
-        st.warning(f"Could not read uploaded file: {e}. Starting fresh.")
-        st.session_state['master_df'] = None
+        st.warning(f"Could not read uploaded file: {e}. Previous data preserved.")
+        # Do NOT clear session — preserve any previously loaded good data
 elif 'master_df' not in st.session_state:
     st.session_state['master_df'] = None
 
