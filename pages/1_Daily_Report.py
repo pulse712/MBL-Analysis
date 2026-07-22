@@ -233,14 +233,16 @@ def build_report_bytes(games, triggers, report_date, odds):
 
 
 def _master_dedup_key(row, date_str=None):
-    """Unique key for a results row; includes opponent when available (doubleheaders)."""
+    """Unique key for a results row; includes opponent + payout line (doubleheader-safe)."""
     if date_str is None:
         try:
             date_str = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
         except Exception:
             date_str = str(row.get('Date', '')).strip()[:10]
     opp = str(row.get('_opponent', row.get('Opponent', ''))).strip()
-    return (date_str, str(row.get('Team', '')), str(row.get('Scenario', '')), opp)
+    # Include payout line so DH games with same scenario but different lines get separate rows
+    payout = str(row.get('_line', row.get('PayoutLine', ''))).strip()
+    return (date_str, str(row.get('Team', '')), str(row.get('Scenario', '')), opp, payout)
 
 
 def build_master_file(existing_df, all_triggers, report_date):
@@ -281,7 +283,7 @@ def build_master_file(existing_df, all_triggers, report_date):
     c.alignment = Alignment(horizontal='center', vertical='center')
     ws.row_dimensions[2].height = 16
 
-    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)']
+    headers = ['Date', 'Team', 'H/A', 'Odds', 'Play', 'Scenario', 'Type', 'Result (W/L)', 'Net P/L ($100)', 'PayoutLine']
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=3, column=col)
         c.value = h
@@ -292,6 +294,9 @@ def build_master_file(existing_df, all_triggers, report_date):
                           top=thin('000000'), bottom=thin('000000'))
     ws.row_dimensions[3].height = 24
     ws.freeze_panes = 'A4'
+    # Hide the PayoutLine helper column (col J) from casual view
+    ws.column_dimensions['J'].width = 0.1
+    ws.column_dimensions['J'].hidden = True
 
     existing_rows = []
     existing_keys = set()
@@ -309,11 +314,12 @@ def build_master_file(existing_df, all_triggers, report_date):
         scen_str = f"#{t['scenario_id']} {t['scenario']}"
         team_str = title_case(t['team'])
         opp = t.get('opponent', '')
-        key_full = (today_str, team_str, scen_str, opp)
-        key_short = (today_str, team_str, scen_str, '')
-        if key_full in existing_keys or key_short in existing_keys:
-            continue
         pl_line = numeric_line(pl_line_for_trigger(t))
+        key_full  = (today_str, team_str, scen_str, opp, str(pl_line))
+        key_short = (today_str, team_str, scen_str, '', str(pl_line))
+        key_noline = (today_str, team_str, scen_str, opp, '')
+        if key_full in existing_keys or key_short in existing_keys or key_noline in existing_keys:
+            continue
         existing_rows.append({
             'Date': today_str,
             'Team': team_str,
@@ -328,6 +334,8 @@ def build_master_file(existing_df, all_triggers, report_date):
             '_opponent': opp,
         })
         existing_keys.add(key_full)
+        # key_noline only for backward compat with old files that had no PayoutLine col
+        # Don't add it — it would block legitimate DH rows with same scenario different line
 
     for i, row in enumerate(existing_rows):
         r = i + 4
@@ -351,7 +359,10 @@ def build_master_file(existing_df, all_triggers, report_date):
 
         # Write P/L as an Excel formula so entering W/L directly in the file auto-calculates
         nc = ws.cell(r, 9)
+        # Prefer stored _line (payout line), fall back to PayoutLine col, then Odds
         ln = numeric_line(line_val)
+        if ln is None:
+            ln = numeric_line(row.get('PayoutLine'))
         if ln is None:
             ln = numeric_line(str(row.get('Odds', '')).replace('+', ''))
         if ln is not None:
@@ -360,11 +371,13 @@ def build_master_file(existing_df, all_triggers, report_date):
             else:
                 nc.value = f'=IF(H{r}="W",ROUND(100/ABS({ln})*100,2),IF(H{r}="L",-100,""))'
         else:
-            # No line available — preserve any previously saved static value
             uploaded_pl = row.get('Net P/L')
             nc.value = uploaded_pl if pd.notna(uploaded_pl) and uploaded_pl != '' else ''
         nc.alignment = Alignment(horizontal='center', vertical='center')
         nc.border = std_border
+
+        # Column J: hidden payout line — persists through upload/download cycle
+        ws.cell(r, 10).value = line_val  # already set to pl_line for new rows
 
         for col in range(1, 8):
             c = ws.cell(r, col)

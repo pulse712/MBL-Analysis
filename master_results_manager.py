@@ -41,8 +41,14 @@ def _find_results_sheet(sheet_names):
 
 def _normalize_results_df(df):
     """Normalize uploaded results to the standard 9-column layout."""
-    df = df.iloc[:, :9].copy()
-    df.columns = RESULTS_COLUMNS
+    # Read up to 10 columns — col 10 is the hidden PayoutLine (payout line for P/L)
+    has_payout_col = len(df.columns) >= 10
+    if has_payout_col:
+        df = df.iloc[:, :10].copy()
+        df.columns = RESULTS_COLUMNS + ['PayoutLine']
+    else:
+        df = df.iloc[:, :9].copy()
+        df.columns = RESULTS_COLUMNS
     df = df[df['Date'].notna()]
     # Normalize Date to YYYY-MM-DD string regardless of how pandas read it
     def _fmt_date(v):
