@@ -64,6 +64,15 @@ def _normalize_results_df(df):
     df = df[date_str.str.match(r'\d{4}-\d{2}-\d{2}', na=False)]
     df['Result'] = df['Result'].astype(str).str.strip().str.upper()
     df.loc[~df['Result'].isin(['W', 'L']), 'Result'] = ''
+    if 'PayoutLine' in df.columns:
+        def _to_int_line(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return None
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                return None
+        df['PayoutLine'] = df['PayoutLine'].apply(_to_int_line)
     return df.reset_index(drop=True)
 
 

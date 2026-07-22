@@ -260,6 +260,81 @@ def test_parse_daily_report_upload():
         return False
 
 
+def test_master_dedup_and_fade_roundtrip():
+    """Test 8: Double-generate dedup + multi-cycle FADE PayoutLine persistence"""
+    print("\n" + "="*60)
+    print("TEST 8: Master Dedup & FADE Round-Trip")
+    print("="*60)
+
+    try:
+        import sys
+        import os
+        from datetime import date
+        from openpyxl import load_workbook
+        import io
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'pages'))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'daily_report_page',
+            os.path.join(os.path.dirname(__file__), 'pages', '1_Daily_Report.py'),
+        )
+        page = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(page)
+
+        bet = {
+            'verdict': 'CLEAR BET', 'line': -150, 'scenario_id': '01', 'scenario': 'B',
+            'team': 'NEW YORK YANKEES', 'opponent': 'BOSTON RED SOX',
+            'home_away': 'home', 'play': 'BET',
+        }
+        fade = {
+            'verdict': 'CLEAR FADE', 'line': -150, 'opp_line': 130,
+            'scenario_id': '02', 'scenario': 'Y', 'team': 'NEW YORK YANKEES',
+            'opponent': 'BOSTON RED SOX', 'home_away': 'home', 'play': 'FADE',
+        }
+
+        # Double-generate should not duplicate
+        df1, _, _ = parse_results_upload(page.build_master_file(None, [bet], date(2026, 7, 21)))
+        df2, _, _ = parse_results_upload(page.build_master_file(df1, [bet], date(2026, 7, 21)))
+        if len(df1) != 1 or len(df2) != 1:
+            print(f"❌ FAILED: Double-generate rows {len(df1)} -> {len(df2)}, expected 1 -> 1")
+            return False
+
+        # DH same matchup different lines -> 2 rows
+        t1 = {**bet, 'line': -150}
+        t2 = {**bet, 'line': -130}
+        df_dh, _, _ = parse_results_upload(page.build_master_file(None, [t1, t2], date(2026, 7, 21)))
+        if len(df_dh) != 2:
+            print(f"❌ FAILED: DH rows {len(df_dh)}, expected 2")
+            return False
+
+        # FADE: 3 upload/generate cycles keep +130 formula
+        df = None
+        ok = True
+        for i in range(3):
+            b = page.build_master_file(df, [fade] if i == 0 else [], date(2026, 7, 21))
+            ws = load_workbook(io.BytesIO(b)).active
+            formula = str(ws['I4'].value or '')
+            jval = ws['J4'].value
+            if '130' not in formula:
+                print(f"❌ FAILED: Cycle {i+1} formula lost +130: {formula}")
+                ok = False
+                break
+            if jval is None:
+                print(f"❌ FAILED: Cycle {i+1} PayoutLine col J is empty")
+                ok = False
+                break
+            df, _, _ = parse_results_upload(b)
+
+        if ok:
+            print("✅ SUCCESS: Dedup and 3-cycle FADE PayoutLine persistence")
+            return True
+        return False
+    except Exception as e:
+        print(f"❌ FAILED: {e}")
+        return False
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "="*70)
@@ -274,6 +349,7 @@ def run_all_tests():
         ("W/L Entry Simulation", test_add_results_with_outcomes),
         ("Formula References", test_file_references),
         ("Daily Report Upload", test_parse_daily_report_upload),
+        ("Master Dedup & FADE Round-Trip", test_master_dedup_and_fade_roundtrip),
     ]
     
     results = []

@@ -232,6 +232,17 @@ def build_report_bytes(games, triggers, report_date, odds):
     return output.getvalue(), n0+n1+n2, n1, n2
 
 
+def _norm_team_dedup(team):
+    """Consistent team label for dedup keys (matches Excel title_case storage)."""
+    return title_case(str(team).strip().upper())
+
+
+def _norm_payout_dedup(val):
+    """Consistent payout line string for dedup keys."""
+    n = numeric_line(val)
+    return str(n) if n is not None else ''
+
+
 def _master_dedup_key(row, date_str=None):
     """Unique key for a results row; includes opponent + payout line (doubleheader-safe)."""
     if date_str is None:
@@ -239,10 +250,28 @@ def _master_dedup_key(row, date_str=None):
             date_str = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
         except Exception:
             date_str = str(row.get('Date', '')).strip()[:10]
-    opp = str(row.get('_opponent', row.get('Opponent', ''))).strip()
-    # Include payout line so DH games with same scenario but different lines get separate rows
-    payout = str(row.get('_line', row.get('PayoutLine', ''))).strip()
-    return (date_str, str(row.get('Team', '')), str(row.get('Scenario', '')), opp, payout)
+    opp = str(row.get('_opponent', row.get('Opponent', ''))).strip().upper()
+    payout = _norm_payout_dedup(row.get('_line', row.get('PayoutLine', '')))
+    return (date_str, _norm_team_dedup(row.get('Team', '')), str(row.get('Scenario', '')), opp, payout)
+
+
+def _dedup_key_variants(date_str, team, scenario, opponent, payout, *, include_legacy=False):
+    """Key forms that count as the same row. Legacy empty-payout keys only for old uploads."""
+    team_n = _norm_team_dedup(team)
+    scen = str(scenario)
+    opp = str(opponent or '').strip().upper()
+    pay = _norm_payout_dedup(payout)
+    keys = set()
+    if pay:
+        keys.add((date_str, team_n, scen, opp, pay))
+        keys.add((date_str, team_n, scen, '', pay))
+    else:
+        keys.add((date_str, team_n, scen, opp, ''))
+        keys.add((date_str, team_n, scen, '', ''))
+    if include_legacy and pay:
+        keys.add((date_str, team_n, scen, opp, ''))
+        keys.add((date_str, team_n, scen, '', ''))
+    return keys
 
 
 def build_master_file(existing_df, all_triggers, report_date):
@@ -304,10 +333,16 @@ def build_master_file(existing_df, all_triggers, report_date):
     if existing_df is not None and not existing_df.empty:
         for _, row in existing_df.iterrows():
             existing_rows.append(row)
-            k = _master_dedup_key(row)
-            existing_keys.add(k)
-            if not k[3]:
-                existing_keys.add((k[0], k[1], k[2], ''))
+            try:
+                d = pd.to_datetime(row.get('Date', '')).strftime('%Y-%m-%d')
+            except Exception:
+                d = str(row.get('Date', '')).strip()[:10]
+            existing_keys.update(_dedup_key_variants(
+                d, row.get('Team', ''), row.get('Scenario', ''),
+                row.get('_opponent', row.get('Opponent', '')),
+                row.get('_line', row.get('PayoutLine', '')),
+                include_legacy=not _norm_payout_dedup(row.get('_line', row.get('PayoutLine', ''))),
+            ))
 
     today_str = report_date.strftime('%Y-%m-%d')
     for t in all_triggers:
@@ -315,10 +350,7 @@ def build_master_file(existing_df, all_triggers, report_date):
         team_str = title_case(t['team'])
         opp = t.get('opponent', '')
         pl_line = numeric_line(pl_line_for_trigger(t))
-        key_full  = (today_str, team_str, scen_str, opp, str(pl_line))
-        key_short = (today_str, team_str, scen_str, '', str(pl_line))
-        key_noline = (today_str, team_str, scen_str, opp, '')
-        if key_full in existing_keys or key_short in existing_keys or key_noline in existing_keys:
+        if _dedup_key_variants(today_str, team_str, scen_str, opp, pl_line) & existing_keys:
             continue
         existing_rows.append({
             'Date': today_str,
@@ -330,12 +362,11 @@ def build_master_file(existing_df, all_triggers, report_date):
             'Type':   t['verdict'],
             'Result': '',
             'Net P/L': None,
+            'PayoutLine': pl_line,
             '_line': pl_line,
             '_opponent': opp,
         })
-        existing_keys.add(key_full)
-        # key_noline only for backward compat with old files that had no PayoutLine col
-        # Don't add it — it would block legitimate DH rows with same scenario different line
+        existing_keys.update(_dedup_key_variants(today_str, team_str, scen_str, opp, pl_line))
 
     for i, row in enumerate(existing_rows):
         r = i + 4
@@ -377,7 +408,7 @@ def build_master_file(existing_df, all_triggers, report_date):
         nc.border = std_border
 
         # Column J: hidden payout line — persists through upload/download cycle
-        ws.cell(r, 10).value = line_val  # already set to pl_line for new rows
+        ws.cell(r, 10).value = ln
 
         for col in range(1, 8):
             c = ws.cell(r, col)
